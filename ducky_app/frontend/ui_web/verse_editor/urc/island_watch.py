@@ -8,7 +8,9 @@ Two PCs share one island through Unreal Revision Control (``revision_push`` /
 - one ``lore --remote history 1 --branch main`` per round reads the remote head (~1 s); while
   the island is behind, ``lore status`` too, so a pull made anywhere clears the alert;
 - only when one of them moved, ``lore_cli.repo_state`` (3 calls) says which remote revisions
-  the island lacks and who made them.
+  the island lacks and who made them;
+- only for news worth an alert, ``lore_cli.overlap`` (1 diff, +1 when this PC has autosaves
+  main lacks) names the files changed on both PCs: the alert says "pull with care".
 
 Revisions made on another PC (a check-in of this PC's own autosave doesn't count) give one
 alert per new remote head: a Windows notification when no Ducky window is in front, the
@@ -60,11 +62,12 @@ _st: dict[str, Any] = {}
 
 def _reset(island: str = "") -> None:
     _st.clear()
-    _st.update(island=island, remote_sig="", local_sig="", behind=False, told="", fails=0)
+    _st.update(island=island, remote_sig="", local_sig="", behind=False, told="", fails=0, both=[])
     if island:
         doc = _read_doc()
         if doc and doc.get("island") == island:
             _st["told"] = str(doc.get("told") or "")  # a restart doesn't tell the same news twice
+            _st["both"] = list(doc.get("both_changed") or [])
 
 
 _reset()
@@ -170,6 +173,27 @@ def news_text(name: str, news: list[dict[str, Any]]) -> str:
     return text
 
 
+def both_text(rels: list[str]) -> str:
+    """ "1 file changed on both PCs: Content/x.verse — pull with care" ("" for none)."""
+    if not rels:
+        return ""
+    n = len(rels)
+    shown = ", ".join(rels[:3]) + (f" (+{n - 3} more)" if n > 3 else "")
+    return f"{n} file{'s' if n != 1 else ''} changed on both PCs: {shown} — pull with care"
+
+
+def _both_changed(island: str, state: dict[str, Any], lore: Any) -> list[str]:
+    """Files the remote changed that this PC changed too (rel paths); [] when lore can't say."""
+    try:
+        res = lore.overlap(island, state=state)
+    except Exception as exc:  # noqa: BLE001
+        res = {"ok": False, "error": str(exc)}
+    if not res.get("ok"):
+        _log.debug("island watch overlap: %s", res.get("error"))
+        return []
+    return [str(f["rel"]) for f in res.get("files") or []]
+
+
 def _interval() -> float:
     try:
         return IDLE_S if _person_away() else ACTIVE_S
@@ -183,7 +207,7 @@ def _failed(error: str) -> float:
     return min(ERROR_MAX_S, _interval() * (2 ** _st["fails"]))
 
 
-def _apply(island: str, state: dict[str, Any]) -> None:
+def _apply(island: str, state: dict[str, Any], lore: Any) -> None:
     name = Path(island).name
     was_behind = _st["behind"]
     incoming = list(state.get("incoming") or [])
@@ -192,13 +216,17 @@ def _apply(island: str, state: dict[str, Any]) -> None:
     _st.update(remote_sig=str(state.get("remote_signature") or ""),
                local_sig=str(state.get("local_signature") or ""), behind=behind)
     text = news_text(name, news) if news else ""
+    if not behind:
+        _st["both"] = []
     if behind and news and _st["remote_sig"] != _st["told"]:
         _st["told"] = _st["remote_sig"]
+        _st["both"] = _both_changed(island, state, lore)
+        detail = text + (f"; {both_text(_st['both'])}" if _st["both"] else "")
         _alert(name, f"{len(news)} new change{'s' if len(news) != 1 else ''} to pull.",
-               f"{text}. Pull when you're ready: ask a Ducky to run revision_pull "
+               f"{detail}. Pull when you're ready: ask a Ducky to run revision_pull "
                "(it never pulls over unsaved work).")
         _push({"type": "island_updates", "island": island, "name": name, "behind": True,
-               "count": len(news), "detail": text})
+               "count": len(news), "detail": detail})
     elif was_behind and not behind:
         _push({"type": "island_updates", "island": island, "name": name, "behind": False, "count": 0,
                "detail": f"{name} is up to date."})
@@ -211,6 +239,7 @@ def _apply(island: str, state: dict[str, Any]) -> None:
         "latest": ({"revision": news[0]["revision"], "by": news[0]["creator"], "message": news[0]["message"]}
                    if behind and news else None),
         "text": text if behind else "",
+        "both_changed": list(_st["both"]),
         "local_revision": state.get("local_revision"),
         "remote_revision": state.get("remote_revision"),
         "told": _st["told"],
@@ -281,7 +310,7 @@ def _updates_round(island: str, lore: Any) -> float:
     if not state.get("ok"):
         return _failed(str(state.get("error") or "repo state"))
     _st["fails"] = 0
-    _apply(island, state)
+    _apply(island, state, lore)
     return _interval()
 
 
@@ -304,10 +333,13 @@ def for_agents() -> dict[str, Any] | None:
         except Exception:  # noqa: BLE001
             pass
     out = {k: doc.get(k) for k in ("island", "name", "behind", "new_changes", "authors", "latest",
-                                   "local_revision", "remote_revision", "checked_at")}
+                                   "both_changed", "local_revision", "remote_revision", "checked_at")}
     if doc.get("behind"):
         out["hint"] = ("Another PC pushed changes to this island. Tell the person; pull only when they "
                        "agree (revision_pull never pulls over unsaved work).")
+        if doc.get("both_changed"):
+            out["hint"] += (" Files in both_changed were changed on both PCs: ask the person which version "
+                            "to keep (this PC's, the other PC's, or merge by hand) before pulling.")
     return out
 
 

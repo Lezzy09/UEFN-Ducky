@@ -21,6 +21,14 @@ class FakePackage:
         return self.name
 
 
+class FakeFileState:
+    def __init__(self, conflicted):
+        self.conflicted = conflicted
+
+    def get_editor_property(self, name):
+        return {"is_conflicted": self.conflicted}[name]
+
+
 class FakeWorld:
     def get_path_name(self):
         return "/MyIsland/MyMap.MyMap"
@@ -41,6 +49,8 @@ def mod(monkeypatch, tmp_path):
         "loaded": [],
         "blank_ok": True,
         "island": str(tmp_path),
+        "conflicted": set(),
+        "queried": [],
     }
 
     unreal = types.ModuleType("unreal")
@@ -79,6 +89,12 @@ def mod(monkeypatch, tmp_path):
             # The map must already be closed: a loaded actor keeps its file open.
             state["synced"].append((list(files), list(state["loaded"])))
             return state["sync_ok"]
+
+        @staticmethod
+        def query_file_states(files, silent):
+            assert silent is True
+            state["queried"].append(list(files))
+            return [FakeFileState(f in state["conflicted"]) for f in files]
 
         @staticmethod
         def last_error_msg():
@@ -267,3 +283,30 @@ def test_targets_name_each_actor_asset_and_folder_file(mod, monkeypatch, tmp_pat
 def test_targets_without_an_island_name_nothing(mod) -> None:
     mod._state["island"] = ""
     assert mod.cmd_revision_targets(paths=["Cube"]) == {"targets": {}}
+
+
+def test_conflicts_names_the_files_revision_control_marks_conflicted(mod) -> None:
+    mod._state["conflicted"] = {"C:/I/Content/a.verse"}
+    out = mod.cmd_revision_conflicts(paths=["C:/I/Content/a.verse", "C:/I/Content/B.uasset", "", "C:/I/Content/a.verse"])
+    assert out == {"conflicted": ["C:/I/Content/a.verse"], "error": ""}
+    # one provider query for every file (fresh states, not the editor's cache)
+    assert mod._state["queried"] == [["C:/I/Content/a.verse", "C:/I/Content/B.uasset"]]
+
+
+def test_conflicts_without_paths_or_with_a_failing_provider(mod, monkeypatch) -> None:
+    assert mod.cmd_revision_conflicts(paths=[]) == {"conflicted": [], "error": ""}
+    assert mod._state["queried"] == []
+
+    def boom(files, silent):
+        raise RuntimeError("provider offline")
+
+    monkeypatch.setattr(mod.unreal.SourceControl, "query_file_states", staticmethod(boom))
+    out = mod.cmd_revision_conflicts(paths=["C:/I/Content/a.verse"])
+    assert out == {"conflicted": [], "error": "remote said no"}  # the provider's own message first
+
+
+def test_conflicts_fall_back_to_one_query_per_file(mod, monkeypatch) -> None:
+    monkeypatch.delattr(mod.unreal.SourceControl, "query_file_states")
+    mod.unreal.SourceControl.query_file_state = staticmethod(lambda f, silent: FakeFileState(f.endswith(".verse")))
+    out = mod.cmd_revision_conflicts(paths=["C:/I/Content/a.verse", "C:/I/Content/B.uasset"])
+    assert out["conflicted"] == ["C:/I/Content/a.verse"]

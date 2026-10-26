@@ -42,6 +42,8 @@ _me_cache: dict[str, tuple[float, dict[str, str]]] = {}
 _me_lock = threading.Lock()
 # Per-user editor collections, never shared between PCs.
 _EXCLUDED_PREFIX = "content/developers/"
+# How this PC changed a file (``overlap``'s ``local``).
+_CHANGE_WORDS = {"A": "added", "M": "modified", "D": "deleted"}
 
 
 def _norm(path: str) -> str:
@@ -228,6 +230,25 @@ def to_pending_files(project_root: str, entries: list[tuple[str, str]]) -> list[
     return out
 
 
+def _files_only(project_root: str, entries: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Entries naming files: ``revision diff`` lists a folder (no trailing ``/``) before its files,
+    so a path some other entry sits under, or a folder on disk, is dropped. Untracked ``dir/``
+    lines stay (they stand for every file under them). Content/Developers/** is excluded."""
+    parents: set[str] = set()
+    for _, rel in entries:
+        parts = rel.lower().rstrip("/").split("/")
+        parents.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    root = Path(project_root)
+    out: list[tuple[str, str]] = []
+    for code, rel in entries:
+        if not rel or rel.startswith("../") or _excluded(rel):
+            continue
+        if not rel.endswith("/") and (rel.lower() in parents or (root / rel).is_dir()):
+            continue
+        out.append((code, rel))
+    return out
+
+
 def _run_lore(project_root: str, args: list[str], timeout: float) -> tuple[bool, str]:
     """Run ``lore.exe -P --repository <root> <args>``. Returns (ok, stdout or error)."""
     detected = detect_lore_executable()
@@ -287,6 +308,7 @@ def _state(project_root: str, timeout: float) -> tuple[dict[str, Any] | None, st
         return None, f"no revision shared with remote {REMOTE_BRANCH} in the last {depth}"
     st.update(
         cmp,
+        changes=[*st["staged"], *st["untracked"]],
         remote_branch=REMOTE_BRANCH,
         remote_revision=remote[0]["revision"],
         remote_signature=remote[0]["signature"],
@@ -326,7 +348,8 @@ def repo_state(project_root: str, *, timeout: float = 60.0) -> dict:
     """{ok, available, repository, branch, local_revision:int|None, remote_revision:int|None,
     behind:bool, ahead:bool, in_sync:bool, staged:[rel paths], untracked:[rel paths], error:str}
     (+ local_branch, remote_branch="main", local_signature, remote_signature, merge_base, and
-    ``incoming``: the remote revisions the local head lacks, see :func:`incoming`).
+    ``incoming``: the remote revisions the local head lacks, see :func:`incoming`; ``changes``:
+    the working-tree ``(code, rel)`` pairs, staged then untracked, deletes included).
     ``branch`` = ``local_branch``; remote and behind/ahead/in_sync are vs remote ``main``.
     ok=False with error when lore.exe is missing, the folder has no .lore, or lore
     fails/times out. ``timeout`` applies to each of the 3 lore calls."""
@@ -347,6 +370,15 @@ def repo_state(project_root: str, *, timeout: float = 60.0) -> dict:
     }
 
 
+def _committed(project_root: str, st: dict[str, Any], timeout: float) -> tuple[list[tuple[str, str]] | None, str]:
+    """Files this PC's commits changed since the merge base (autosaves main lacks): one
+    ``revision diff`` when the local head is ahead, none otherwise."""
+    if not st.get("ahead"):
+        return [], ""
+    ok, out = _run_lore(project_root, ["revision", "diff", st["merge_base"], "--target", st["local_signature"]], timeout)
+    return (parse_revision_diff(out), "") if ok else (None, out)
+
+
 def pending_paths(project_root: str, *, timeout: float = 60.0) -> dict:
     """{ok, paths:[absolute file paths, forward slashes], error} — every file not yet on remote
     ``main``: working-tree changes (staged + untracked) plus files changed between the merge base
@@ -357,15 +389,11 @@ def pending_paths(project_root: str, *, timeout: float = 60.0) -> dict:
     st, err = _state(project_root, timeout)
     if st is None:
         return _failed(err, paths=[])
-    committed: list[tuple[str, str]] = []
-    if st["ahead"]:
-        args = ["revision", "diff", st["merge_base"], "--target", st["local_signature"]]
-        ok, out = _run_lore(project_root, args, timeout)
-        if not ok:
-            return _failed(out, paths=[])
-        committed = parse_revision_diff(out)
+    committed, err = _committed(project_root, st, timeout)
+    if committed is None:
+        return _failed(err, paths=[])
     try:
-        paths = to_pending_files(project_root, [*st["staged"], *st["untracked"], *committed])
+        paths = to_pending_files(project_root, [*st["changes"], *committed])
     except (OSError, ValueError) as exc:
         return _failed(f"listing pending files failed: {exc}", paths=[])
     return {"ok": True, "paths": paths, "error": ""}
@@ -427,3 +455,66 @@ def locks(project_root: str, *, timeout: float = 60.0) -> dict:
         return {"ok": True, "locks": rows, "me": me, "error": ""}
     except Exception as exc:  # noqa: BLE001 — never raises
         return _failed(f"lock query failed: {exc}", locks=[], me="")
+
+
+def incoming_paths(project_root: str, *, state: dict | None = None, timeout: float = 60.0) -> dict:
+    """{ok, files:[{rel, path, code, deleted}], error}: the files remote ``main`` changed since
+    the merge base (what a pull brings), deletions included (``code`` "D", ``deleted``).
+    ``state`` is a :func:`repo_state` result (read when not given: 3 calls); on top of it, one
+    ``revision diff`` (~1 s), none when the island isn't behind. Never raises."""
+    try:
+        st = state or repo_state(project_root, timeout=timeout)
+        if not st.get("ok"):
+            return _failed(str(st.get("error") or "could not read the repository"), files=[])
+        if not st.get("behind"):
+            return {"ok": True, "files": [], "error": ""}
+        args = ["revision", "diff", st["merge_base"], "--target", st["remote_signature"]]
+        ok, out = _run_lore(project_root, args, timeout)
+        if not ok:
+            return _failed(out, files=[])
+        root = Path(project_root)
+        files = [
+            {"rel": rel, "path": (root / rel).as_posix(), "code": code, "deleted": code == "D"}
+            for code, rel in _files_only(project_root, parse_revision_diff(out))
+        ]
+        return {"ok": True, "files": files, "error": ""}
+    except Exception as exc:  # noqa: BLE001 — never raises
+        return _failed(f"listing incoming files failed: {exc}", files=[])
+
+
+def overlap(project_root: str, *, state: dict | None = None, timeout: float = 60.0) -> dict:
+    """{ok, files:[{rel, path, local, remote}], error}: files a pull would bring (remote ``main``
+    changed them, :func:`incoming_paths`) that this PC changed too and main lacks: working-tree
+    changes (deletes and untracked included) and this PC's commits since the merge base.
+    ``local`` is "added" / "modified" / "deleted" ("changed" for another lore code), ``remote``
+    the diff code ("A", "M", "D"). A file deleted on both sides isn't listed.
+    Cost on top of ``state`` (a :func:`repo_state` result, read when not given): nothing when
+    the island isn't behind, else 1 ``revision diff``, +1 when this PC has commits main lacks.
+    Never raises."""
+    try:
+        st = state or repo_state(project_root, timeout=timeout)
+        inc = incoming_paths(project_root, state=st, timeout=timeout)
+        if not inc["ok"] or not inc["files"]:
+            return {"ok": inc["ok"], "files": [], "error": inc["error"]}
+        committed, err = _committed(project_root, st, timeout)
+        if committed is None:
+            return _failed(err, files=[])
+        mine: dict[str, str] = {}
+        folders: list[tuple[str, str]] = []
+        # Working-tree lines last: they are the newest state of a file.
+        for code, rel in _files_only(project_root, [*committed, *(st.get("changes") or [])]):
+            if rel.endswith("/"):
+                folders.append((code, rel.lower()))
+            else:
+                mine[rel.lower()] = code
+        files: list[dict[str, str]] = []
+        for f in inc["files"]:
+            low = f["rel"].lower()
+            code = mine.get(low) or next((c for c, d in folders if low.startswith(d)), "")
+            if not code or (code == "D" and f["deleted"]):
+                continue
+            files.append({"rel": f["rel"], "path": f["path"], "local": _CHANGE_WORDS.get(code, "changed"),
+                          "remote": f["code"]})
+        return {"ok": True, "files": files, "error": ""}
+    except Exception as exc:  # noqa: BLE001 — never raises
+        return _failed(f"comparing changes failed: {exc}", files=[])

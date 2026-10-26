@@ -410,3 +410,123 @@ def test_locks_errors_never_raise(tmp_path: Path, island: Path, monkeypatch: pyt
 
     monkeypatch.setattr(lore_cli, "_run_lore", boom)
     assert lore_cli.locks(str(island))["ok"] is False
+
+
+# --------------------------------------------------------------------------- overlap (step 7)
+
+SIG17 = "372e001ffd979c52b69a388df7d25f2ff79a4425826c84347088519c7d696860"
+SIG19 = "8f22c37a2922d17e904a649a223e3ee1b134ad9a1bc5408d438f65a9933d352b"
+SPHERE = "Content/__ExternalActors__/test_ducky_v2/1/8X/2FWY3VPOAEBYKZPCJNGYE6.uasset"
+
+REMOTE_MAIN_17 = f"""Revision  : 17
+Signature : {SIG17}
+Merge     : 0ab87e97481a5256a3c082190aae9bccc07312d233dc32a7d93d06e57af6d697
+Creator   : Nachtㅤ
+    Test outil 3 - cube deplace depuis le PC (revision_push complet)
+
+{REMOTE_MAIN_15}"""
+
+REMOTE_MAIN_19 = f"""Revision  : 19
+Signature : {SIG19}
+Merge     : 887880ace9667f561f0d491e3145008347cb082fa3f0901daf915a12277b5d93
+Creator   : Michㅤㅤㅤㅤou
+    Test alerte - sphere deplacee depuis le portable
+
+{REMOTE_MAIN_17}"""
+
+# lore revision diff <SIG17> --target <SIG19> (captured live)
+DIFF_17_19 = f"M {SPHERE}\n"
+
+# lore revision diff <rev 1> --target <rev 5> (captured live): folders come before their files.
+DIFF_1_5 = """A Content/Developers/PC
+A Content/Developers/PC/Collections
+A Content/Python
+A Content/Python/init_unreal.py
+A Content/__ExternalActors__/test_ducky_v2/8/UG
+A Content/__ExternalActors__/test_ducky_v2/8/UG/VYTNCN5KW3CYSAI2X494RQ.uasset
+M Content/__ExternalActors__/test_ducky_v2/C/WX/VYXTJPVDYST7GZN1Z2XJFE.uasset
+M Content/test_ducky_v2.umap
+M test_ducky_v2.uefnproject
+"""
+
+# This PC on main 17, a Verse file and the sphere edited outside UEFN, the laptop pushed 19.
+STATUS_MAIN_17_EDITED = f"""Repository ee8be99853d04268b2387ed5bf07177e
+On branch main revision 17 -> {SIG17}
+Remote revision 17 -> {SIG17}
+Local branch in sync with remote
+Changes staged for commit:
+M {SPHERE}
+Untracked files:
+A Content/conflict_test.verse
+"""
+
+INCOMING_KEY = f"revision|diff|{SIG17}|--target|{SIG19}"
+
+
+def test_incoming_paths_skips_folders_and_flags_deletions(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLore({("revision", "diff", "base", "--target", "head"): DIFF_1_5 + "D Content/Gone.uasset\n"})
+    monkeypatch.setattr(lore_cli, "_run_lore", fake)
+    state = {"ok": True, "behind": True, "merge_base": "base", "remote_signature": "head"}
+    out = lore_cli.incoming_paths(str(island), state=state)
+    root = island.as_posix()
+    assert out["ok"] and [(f["code"], f["rel"]) for f in out["files"]] == [
+        ("A", "Content/Python/init_unreal.py"),
+        ("A", "Content/__ExternalActors__/test_ducky_v2/8/UG/VYTNCN5KW3CYSAI2X494RQ.uasset"),
+        ("M", "Content/__ExternalActors__/test_ducky_v2/C/WX/VYXTJPVDYST7GZN1Z2XJFE.uasset"),
+        ("M", "Content/test_ducky_v2.umap"),
+        ("M", "test_ducky_v2.uefnproject"),
+        ("D", "Content/Gone.uasset"),
+    ]
+    assert out["files"][0]["path"] == f"{root}/Content/Python/init_unreal.py"
+    assert [f["deleted"] for f in out["files"]] == [False] * 5 + [True]
+    assert len(fake.calls) == 1
+
+
+def test_overlap_names_the_file_changed_on_both_pcs(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _lore(STATUS_MAIN_17_EDITED, SIG17, REMOTE_MAIN_17, REMOTE_MAIN_19, **{INCOMING_KEY: DIFF_17_19})
+    monkeypatch.setattr(lore_cli, "_run_lore", fake)
+    out = lore_cli.overlap(str(island))
+    assert out == {"ok": True, "error": "", "files": [
+        {"rel": SPHERE, "path": f"{island.as_posix()}/{SPHERE}", "local": "modified", "remote": "M"},
+    ]}
+    # repo_state (3 calls) + the incoming diff; not ahead, so no local diff
+    assert len(fake.calls) == 4 and fake.calls[-1] == ["revision", "diff", SIG17, "--target", SIG19]
+
+
+def test_overlap_with_a_state_costs_only_the_diffs(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ahead (an autosave main lacks) and behind (the laptop pushed): both diffs are read.
+    state = {"ok": True, "behind": True, "ahead": True, "merge_base": "base", "local_signature": "mine",
+             "remote_signature": "theirs",
+             "changes": [("D", "Content/Both.uasset"), ("A", "Content/NewFolder/"), ("M", "Content/Here.verse")]}
+    fake = FakeLore({
+        ("revision", "diff", "base", "--target", "theirs"): (
+            f"M {ACTOR}\nA Content/NewFolder\nA Content/NewFolder/A.verse\nD Content/Both.uasset\n"
+            "M content/here.verse\nM Content/OnlyThere.uasset\n"
+        ),
+        ("revision", "diff", "base", "--target", "mine"): DIFF_11_12,
+    })
+    monkeypatch.setattr(lore_cli, "_run_lore", fake)
+    out = lore_cli.overlap(str(island), state=state)
+    assert [(f["rel"], f["local"], f["remote"]) for f in out["files"]] == [
+        (ACTOR, "modified", "M"),  # this PC's autosave commit
+        ("Content/NewFolder/A.verse", "added", "A"),  # under an untracked folder
+        ("content/here.verse", "modified", "M"),  # Windows paths: case doesn't matter
+    ]  # deleted on both sides: nothing to choose
+    assert len(fake.calls) == 2
+
+
+def test_overlap_when_not_behind_reads_nothing_more(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLore({})
+    monkeypatch.setattr(lore_cli, "_run_lore", fake)
+    state = {"ok": True, "behind": False, "ahead": True, "changes": [("M", "Content/A.verse")]}
+    assert lore_cli.overlap(str(island), state=state) == {"ok": True, "files": [], "error": ""}
+    assert fake.calls == []
+
+
+def test_overlap_errors_never_raise(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = {"ok": True, "behind": True, "ahead": False, "merge_base": "b", "remote_signature": "t"}
+    monkeypatch.setattr(lore_cli, "_run_lore", lambda *a: (False, "lore revision timed out after 60s"))
+    assert lore_cli.overlap(str(island), state=state) == {"ok": False, "files": [],
+                                                          "error": "lore revision timed out after 60s"}
+    assert lore_cli.overlap(str(island), state={"ok": False, "error": "no lore"})["error"] == "no lore"
+    assert lore_cli.overlap(str(island), state={"ok": True, "behind": True})["ok"] is False  # malformed

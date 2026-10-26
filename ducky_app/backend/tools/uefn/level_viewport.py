@@ -147,8 +147,8 @@ def revision_push(description: str, pretty: bool = False) -> str:
 
 
 @plugin_mcp_tool("uefn")
-def revision_pull(force: bool = False, pretty: bool = False) -> str:
-    """Pull the remote's changes into the island and reload the map. Never force over unsaved work without asking the person."""
+def revision_pull(force: bool = False, allow_both_changed: bool = False, pretty: bool = False) -> str:
+    """Pull the remote's changes and reload the map. Never force over unsaved work or files changed on both PCs unasked."""
     root = _island_root()
     if not root:
         return tool_json({"ok": False, "error": "UEFN has no island open"}, pretty=pretty)
@@ -158,6 +158,31 @@ def revision_pull(force: bool = False, pretty: bool = False) -> str:
         return tool_json({"ok": False, "error": before.get("error") or "could not read the repository"}, pretty=pretty)
     if not before.get("behind"):
         return tool_json({"ok": True, "up_to_date": True, **_remote_state(before)}, pretty=pretty)
+    # A file changed both here and on the other PC: never let the pull pick a side unasked.
+    # Its own flag: forcing past unsaved work must not also wave this through.
+    both = lore.overlap(root, state=before)
+    both_changed = [{k: f[k] for k in ("rel", "local", "remote")} for f in both.get("files") or []]
+    if not allow_both_changed and not both.get("ok"):
+        return tool_json(
+            {
+                "ok": False,
+                "error": f"could not check which files changed on both PCs ({both.get('error')}): "
+                "tell the person, pull with allow_both_changed=true only if they agree",
+            },
+            pretty=pretty,
+        )
+    if not allow_both_changed and both_changed:
+        names = ", ".join(f["rel"] for f in both_changed[:3]) + (" …" if len(both_changed) > 3 else "")
+        return tool_json(
+            {
+                "ok": False,
+                "both_changed": both_changed,
+                "error": f"{len(both_changed)} file{'s' if len(both_changed) != 1 else ''} changed on both PCs "
+                f"({names}): nothing was pulled. Ask the person what to do with each: keep this PC's version, "
+                "take the other PC's, or merge by hand; then pull with allow_both_changed=true",
+            },
+            pretty=pretty,
+        )
     result = send_command("revision_sync", {"force": bool(force)}, timeout=_REVISION_TIMEOUT)
     if result.get("needs_save"):
         return tool_json(
@@ -170,13 +195,31 @@ def revision_pull(force: bool = False, pretty: bool = False) -> str:
             pretty=pretty,
         )
     after = lore.repo_state(root)
-    return tool_json(
-        {
-            "ok": bool(result.get("ok")),
-            "reloaded": bool(result.get("reloaded")),
-            "seconds": result.get("seconds"),
-            **_remote_state(after),
-            "error": result.get("error") or after.get("error") or "",
-        },
-        pretty=pretty,
-    )
+    out = {
+        "ok": bool(result.get("ok")),
+        "reloaded": bool(result.get("reloaded")),
+        "seconds": result.get("seconds"),
+        **_remote_state(after),
+        "error": result.get("error") or after.get("error") or "",
+    }
+    if both_changed:
+        out.update(both_changed=both_changed, **_conflicts(both.get("files") or []))
+    return tool_json(out, pretty=pretty)
+
+
+def _conflicts(files: list[dict]) -> dict:
+    """After a forced pull over files changed on both PCs: which ones UEFN marks conflicted."""
+    try:
+        res = send_command("revision_conflicts", {"paths": [f["path"] for f in files]}, timeout=60.0)
+        marked = {str(p).replace("\\", "/").lower() for p in res.get("conflicted") or []}
+        error = str(res.get("error") or "")
+    except Exception as exc:  # an older listener: no such command
+        marked, error = set(), str(exc)
+    conflicted = [f["rel"] for f in files if f["path"].lower() in marked]
+    if conflicted:
+        hint = ("UEFN marks these files conflicted: the person resolves them in UEFN (Revision Control in the "
+                "status bar > Resolve Conflicts), then pushes (revision_push).")
+    else:
+        hint = ("UEFN marks none of them conflicted" + (f" (could not ask: {error})" if error else "")
+                + ": have the person check each file kept both PCs' changes before pushing.")
+    return {"conflicted": conflicted, "hint": hint}

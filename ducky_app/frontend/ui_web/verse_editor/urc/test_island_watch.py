@@ -19,6 +19,8 @@ class FakeLore:
         self.lock_rows: list[dict] = []
         self.locks_ok = True
         self.lock_calls = 0
+        self.both: list[str] = []
+        self.overlap_calls = 0
 
     def remote_head(self, root):
         self.calls.append("remote_head")
@@ -31,6 +33,12 @@ class FakeLore:
     def repo_state(self, root):
         self.calls.append("repo_state")
         return dict(self.state)
+
+    def overlap(self, root, *, state=None):
+        assert state is not None  # reuses the round's repo_state: no extra status/history calls
+        self.overlap_calls += 1
+        return {"ok": True, "files": [{"rel": rel, "local": "modified", "remote": "M"} for rel in self.both],
+                "error": ""}
 
     def locks(self, root):
         self.lock_calls += 1
@@ -278,3 +286,35 @@ def test_norm_path(tmp_path: Path) -> None:
     p = iw.norm_path(messy)
     assert "\\" not in p and ".." not in p and p == iw.norm_path(p)
     assert p.endswith("/content/a.uasset" if iw.os.name == "nt" else "/Content/A.uasset")
+
+
+def test_news_names_files_changed_on_both_pcs(env) -> None:
+    env.lore.both = ["Content/conflict_test.verse"]
+    env.lore.state = behind_15()
+    iw.tick()
+    detail = env.alerts[0][2]
+    assert detail.startswith("1 new change on test_ducky_v2 from Mich ou: “moved the sphere”; "
+                             "1 file changed on both PCs: Content/conflict_test.verse — pull with care. ")
+    assert env.pushes[0]["detail"] == detail.split(". Pull when")[0]
+    assert env.doc["both_changed"] == ["Content/conflict_test.verse"]
+    out = iw.for_agents()
+    assert out["both_changed"] == ["Content/conflict_test.verse"] and "both_changed" in out["hint"]
+    # Only news costs the overlap: a quiet round reads nothing more, and keeps the list.
+    iw.tick()
+    assert env.lore.overlap_calls == 1 and env.doc["both_changed"] == ["Content/conflict_test.verse"]
+    # Pulled: nothing changed on both sides any more.
+    env.lore.local = {"ok": True, "revision": 15, "signature": "s15", "error": ""}
+    env.lore.state = IN_SYNC_15
+    iw.tick()
+    assert env.doc["both_changed"] == [] and "both_changed" not in (iw.for_agents() or {}).get("hint", "")
+
+
+def test_no_overlap_for_own_check_ins_or_without_news(env) -> None:
+    env.lore.state = behind_15(own=True)
+    iw.tick()
+    assert env.lore.overlap_calls == 0 and env.doc["both_changed"] == []
+
+
+def test_both_text() -> None:
+    assert iw.both_text([]) == ""
+    assert iw.both_text(["a", "b", "c", "d", "e"]) == "5 files changed on both PCs: a, b, c (+2 more) — pull with care"

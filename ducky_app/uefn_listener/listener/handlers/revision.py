@@ -116,6 +116,36 @@ def cmd_revision_sync(force: bool = False, reload: bool = True) -> dict:
     }
 
 
+@register("revision_conflicts")
+def cmd_revision_conflicts(paths: Optional[List[str]] = None) -> dict:
+    """Which of ``paths`` (island files) revision control marks conflicted, after a pull.
+
+    ``query_file_state(s)`` asks the provider again (the editor's state cache can be stale).
+    Never opens a dialog; never resolves anything.
+    """
+    files = list(dict.fromkeys(str(p).strip() for p in paths or [] if str(p or "").strip()))
+    if not files:
+        return {"conflicted": [], "error": ""}
+    sc = unreal.SourceControl
+    try:
+        if hasattr(sc, "query_file_states"):
+            states = list(sc.query_file_states(files, True) or [])
+        else:
+            states = [sc.query_file_state(f, True) for f in files]
+    except Exception as exc:
+        return {"conflicted": [], "error": _last_error() or f"querying the file states failed: {exc}"}
+    if len(states) != len(files):
+        return {"conflicted": [], "error": f"{len(states)} states for {len(files)} files"}
+    conflicted = []
+    for path, state in zip(files, states):
+        try:
+            if bool(state.get_editor_property("is_conflicted")):
+                conflicted.append(path)
+        except Exception:
+            continue
+    return {"conflicted": conflicted, "error": ""}
+
+
 def _package_file(package: str, mount: str, content: str) -> str:
     """``/<mount>/A/B`` (object or subobject suffix allowed) → its ``.uasset``/``.umap`` under
     ``Content``, or the folder when it names one. Empty for another mount or nothing on disk."""

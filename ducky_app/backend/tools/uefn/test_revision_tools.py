@@ -11,7 +11,7 @@ import pytest
 from backend.tools.uefn import level_viewport
 
 
-def fake_lore(*, paths=None, states=None):
+def fake_lore(*, paths=None, states=None, both=None):
     states = list(states or [{"ok": True, "in_sync": True, "behind": 0, "ahead": 0}])
     calls = []
 
@@ -23,7 +23,11 @@ def fake_lore(*, paths=None, states=None):
         calls.append(("pending_paths", root))
         return {"ok": True, "paths": list(paths or []), "error": ""}
 
-    return SimpleNamespace(repo_state=repo_state, pending_paths=pending_paths, calls=calls)
+    def overlap(root, *, state=None, timeout=60.0):
+        calls.append(("overlap", root))
+        return both or {"ok": True, "files": [], "error": ""}
+
+    return SimpleNamespace(repo_state=repo_state, pending_paths=pending_paths, overlap=overlap, calls=calls)
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +65,8 @@ def test_push_checks_in_the_pending_files_then_confirms(root) -> None:
 def test_push_names_a_pending_file_the_other_pc_holds_and_checks_nothing_in(root, others_locks) -> None:
     lore = fake_lore(paths=["C:/Islands/MyIsland/Content/A.uasset", "C:/Islands/MyIsland/Content/B.uasset"])
     others_locks["c:/islands/myisland/content/b.uasset"] = "Mich ou"
-    with patch.object(level_viewport, "_lore_cli", return_value=lore),             patch.object(level_viewport, "send_command") as send:
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
         out = json.loads(level_viewport.revision_push("moved the cube"))
     send.assert_not_called()
     assert out["ok"] is False
@@ -116,7 +121,7 @@ def test_pull_with_unsaved_work_asks_instead(root) -> None:
         out = json.loads(level_viewport.revision_pull())
     assert out["ok"] is False and out["needs_save"] == ["/MyIsland/X"]
     assert "ask the person" in out["error"]
-    assert lore.calls == [("repo_state", root)]
+    assert lore.calls == [("repo_state", root), ("overlap", root)]
 
 
 def test_no_island_open() -> None:
@@ -168,4 +173,70 @@ def test_push_refuses_while_the_island_is_behind(root) -> None:
         out = json.loads(level_viewport.revision_push("moved the cube"))
     assert out["ok"] is False and out["behind"] is True and "revision_pull" in out["error"]
     assert lore.calls == [("repo_state", root)]
+    send.assert_not_called()
+
+
+VERSE = {"rel": "Content/x.verse", "path": "C:/Islands/MyIsland/Content/x.verse", "local": "modified", "remote": "M"}
+BEHIND = [{"ok": True, "in_sync": False, "behind": True, "ahead": False},
+          {"ok": True, "in_sync": True, "behind": False, "ahead": False}]
+
+
+def test_pull_refuses_when_a_file_changed_on_both_pcs(root) -> None:
+    lore = fake_lore(states=BEHIND, both={"ok": True, "files": [VERSE], "error": ""})
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        out = json.loads(level_viewport.revision_pull())
+    send.assert_not_called()
+    assert out == {
+        "ok": False,
+        "both_changed": [{"rel": "Content/x.verse", "local": "modified", "remote": "M"}],
+        "error": "1 file changed on both PCs (Content/x.verse): nothing was pulled. Ask the person what to do "
+        "with each: keep this PC's version, take the other PC's, or merge by hand; then pull with allow_both_changed=true",
+    }
+
+
+def test_pull_refuses_when_the_overlap_cannot_be_read(root) -> None:
+    lore = fake_lore(states=BEHIND, both={"ok": False, "files": [], "error": "lore revision timed out"})
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        out = json.loads(level_viewport.revision_pull())
+    send.assert_not_called()
+    assert out["ok"] is False and "lore revision timed out" in out["error"] and "allow_both_changed=true" in out["error"]
+
+
+def test_forced_pull_over_both_changed_files_names_the_conflicted_ones(root) -> None:
+    other = dict(VERSE, rel="Content/B.uasset", path="C:/Islands/MyIsland/Content/B.uasset")
+    lore = fake_lore(states=BEHIND, both={"ok": True, "files": [VERSE, other], "error": ""})
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        send.side_effect = [
+            {"ok": True, "synced": True, "reloaded": True, "seconds": 4.0, "error": ""},
+            {"conflicted": [r"C:\Islands\MyIsland\Content\x.verse"], "error": ""},
+        ]
+        out = json.loads(level_viewport.revision_pull(allow_both_changed=True))
+    assert send.call_args_list[0].args == ("revision_sync", {"force": False})
+    assert send.call_args_list[1].args == (
+        "revision_conflicts", {"paths": [VERSE["path"], other["path"]]})
+    assert out["ok"] is True and out["conflicted"] == ["Content/x.verse"]
+    assert [f["rel"] for f in out["both_changed"]] == ["Content/x.verse", "Content/B.uasset"]
+    assert "Resolve Conflicts" in out["hint"]
+
+
+def test_forced_pull_with_an_older_listener_still_warns(root) -> None:
+    lore = fake_lore(states=BEHIND, both={"ok": True, "files": [VERSE], "error": ""})
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        send.side_effect = [{"ok": True, "synced": True, "reloaded": True}, RuntimeError("Unknown command")]
+        out = json.loads(level_viewport.revision_pull(allow_both_changed=True))
+    assert out["ok"] is True and out["conflicted"] == []
+    assert "Unknown command" in out["hint"] and "check each file" in out["hint"]
+
+
+def test_force_alone_does_not_pull_over_files_changed_on_both_pcs(root) -> None:
+    # force is for unsaved work: it must not also wave a both-changed file through.
+    lore = fake_lore(states=BEHIND, both={"ok": True, "files": [VERSE], "error": ""})
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        out = json.loads(level_viewport.revision_pull(force=True))
+    assert out["ok"] is False and out["both_changed"] and "allow_both_changed=true" in out["error"]
     send.assert_not_called()
