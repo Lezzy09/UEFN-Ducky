@@ -21,7 +21,8 @@ from backend.store.switch import use_db
 from frontend.app_paths import resolve_app_data_dir
 
 _SAVE_LOCK = threading.RLock()
-_RUN_CAP = 20
+_RUN_CAP = 20  # runs a workflow keeps by default (its keep_runs, up to _RUN_CAP_MAX)
+_RUN_CAP_MAX = 100
 LOCAL = "local"
 _LOCAL_OWNER = {"id": LOCAL, "kind": LOCAL, "label": "Local", "state": "ok", "readOnly": False, "reason": ""}
 _BUILTIN_STARTERS = {"start.manual", "start.chat", "start.cron", "flow.input"}
@@ -528,39 +529,64 @@ def runs_here(wf: dict[str, Any]) -> bool:
     return owner.get("kind", LOCAL) == LOCAL or bool(wf.get("run_here"))
 
 
+def keep_runs(wf: dict[str, Any] | None) -> int:
+    """How many runs (and their files) a workflow keeps: its keep_runs, 1 to 100, default 20."""
+    try:
+        wanted = int((wf or {}).get("keep_runs") or _RUN_CAP)
+    except (TypeError, ValueError):
+        return _RUN_CAP
+    return min(max(wanted, 1), _RUN_CAP_MAX)
+
+
+def _drop_run_files(workflow_id: str, runs: list[Any]) -> None:
+    from backend.automations.files import drop_run_folders
+
+    drop_run_folders(workflow_id, [str(r.get("run") or "") for r in runs if isinstance(r, dict)])
+
+
 def append_run(workflow_id: str, run: dict[str, Any]) -> None:
-    """Per-PC run log; never touches the (synced) workflow doc."""
+    """Per-PC run log; never touches the (synced) workflow doc. The oldest runs beyond
+    the workflow's keep_runs go, with their files."""
     at = float(run.get("ended") or run.get("started") or time.time())
     if not use_db("automations"):
         wf = _read_file(_files_dir() / f"{workflow_id}.json") if _safe_file_id(workflow_id) else None
         if wf is None:
             return
-        wf["runs"] = (list(wf.get("runs") or []) + [run])[-_RUN_CAP:]
+        runs = list(wf.get("runs") or []) + [run]
+        cut = max(len(runs) - keep_runs(wf), 0)
+        dropped, wf["runs"] = runs[:cut], runs[cut:]
         wf["last_run"] = at
         _files_put(wf)
+        _drop_run_files(workflow_id, dropped)
         return
     from backend.automations import owned
 
     found = owned.find(workflow_id)
     if found is not None:
-        owned.append_run(found[0]["account"], str(found[1]["id"]), run, at)
+        dropped = owned.append_run(found[0]["account"], str(found[1]["id"]), run, at, keep=keep_runs(found[1]))
+        _drop_run_files(workflow_id, dropped)
 
 
 def clear_runs(workflow_id: str) -> bool:
-    """Empty this PC's run log for one workflow (Clear log); the workflow is untouched."""
+    """Empty this PC's run log for one workflow (Clear log), and those runs' files; the
+    workflow is untouched."""
     if not use_db("automations"):
         wf = _read_file(_files_dir() / f"{workflow_id}.json") if _safe_file_id(workflow_id) else None
         if wf is None:
             return False
-        wf["runs"] = []
+        dropped, wf["runs"] = list(wf.get("runs") or []), []
         _files_put(wf)
+        _drop_run_files(workflow_id, dropped)
         return True
     from backend.automations import owned
 
     found = owned.find(workflow_id)
     if found is None:
         return False
-    owned.clear_runs(found[0]["account"], str(found[1]["id"]))
+    aid, wid = found[0]["account"], str(found[1]["id"])
+    dropped = owned.runs(aid, wid)
+    owned.clear_runs(aid, wid)
+    _drop_run_files(workflow_id, dropped)
     return True
 
 
@@ -576,6 +602,7 @@ def _view(doc: dict[str, Any], owner: dict[str, Any], state: dict[str, Any], run
         "folder": normalize_folder(doc.get("folder")),
         "graph": normalize_graph(doc.get("graph")),
         "updated": float(doc.get("updated") or 0.0),
+        "keep_runs": keep_runs(doc),
         "runs": list(runs),
         "last_run": float(state.get("last_run") or 0.0),
         "run_here": bool(state.get("run_here")),
@@ -684,6 +711,8 @@ def _merge(out: dict[str, Any], doc: dict[str, Any], *, shared: bool = False) ->
         out["enabled"] = bool(doc.get("enabled"))
     if "folder" in doc:
         out["folder"] = normalize_folder(doc.get("folder"))
+    if "keep_runs" in doc:
+        out["keep_runs"] = keep_runs(doc)
     made_by = doc.get("created_by")
     if isinstance(made_by, dict) and not out.get("created_by"):
         # The agent chat that made it (set once, on creation).

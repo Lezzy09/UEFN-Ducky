@@ -374,9 +374,12 @@ def state(aid: str, workflow_id: str) -> dict[str, Any]:
     return {"last_run": row["last_run"], "run_here": row["run_here"]}
 
 
-def append_run(aid: str, workflow_id: str, run: dict[str, Any], at: float) -> None:
-    kept = (runs(aid, workflow_id) + [run])[-RUN_CAP:]
-    runtime.runtime_put(aid, workflow_id, runs=_seal(kept, aid), last_run=at)
+def append_run(aid: str, workflow_id: str, run: dict[str, Any], at: float, *, keep: int = RUN_CAP) -> list[dict[str, Any]]:
+    """Add a run, keep the last ``keep``; returns the runs that were dropped."""
+    every = runs(aid, workflow_id) + [run]
+    cut = max(len(every) - max(int(keep), 1), 0)
+    runtime.runtime_put(aid, workflow_id, runs=_seal(every[cut:], aid), last_run=at)
+    return every[:cut]
 
 
 def clear_runs(aid: str, workflow_id: str) -> None:

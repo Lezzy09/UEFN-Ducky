@@ -2097,6 +2097,10 @@ def _image_generator_row(row: Any, pid: str) -> dict[str, Any] | None:
         out["cost"] = cost
     if row.get("paid") is True:
         out["paid"] = True
+    # Optional: the tool argument a reference picture goes in; such a tool is offered on Edit Image too.
+    image_arg = str(row.get("image_arg") or "").strip()
+    if image_arg:
+        out["image_arg"] = image_arg
     try:
         from backend.automations.catalog import _fields
 

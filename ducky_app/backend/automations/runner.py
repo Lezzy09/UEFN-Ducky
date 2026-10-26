@@ -528,6 +528,7 @@ _ACTION_TYPES = frozenset(
         "flow.foreach",
         "flow.repeat",
         "flow.branch",
+        "flow.choose",
         "tool.call",
         "pipeline.agent",
         "pipeline.finish",
@@ -605,6 +606,7 @@ def run_workflow(
     end_token = _RUN_END.set(end_hooks)
     wid = str(wf["id"])
     run_id = uuid.uuid4().hex[:12]
+    parent = _LIVE.get()  # a Run workflow step's run: this one is part of it
     live_token = _LIVE.set((wid, run_id))
     registry_token = _REGISTRY_RUNS.set((*_REGISTRY_RUNS.get(), (wid, run_id)))
     live_runs.start(wid, run_id)
@@ -685,6 +687,12 @@ def run_workflow(
         "steps": steps,
         "node_outputs": node_outputs,
     }
+    returned = ctx.get(_RETURN_KEY) if isinstance(ctx.get(_RETURN_KEY), dict) else {}
+    title = as_text(ctx.get("run_title") or returned.get("run_title") or "").strip()[:120]
+    if title:
+        run["title"] = title  # the run picker's name for it ("Grey Wolf")
+    if parent:
+        run["parent"] = {"workflow": parent[0], "run": parent[1]}
     append_run(wf["id"], run)
     return {
         "ok": ok,
@@ -1166,6 +1174,49 @@ def _exec_stoppable_step(node: dict[str, Any], payload: dict[str, Any], inputs: 
     return box["step"]
 
 
+def _uefn_projects() -> list[dict[str, str]]:
+    """Ducky's UEFN islands: [{name, path}]."""
+    from frontend.ui_web.known_projects import list_known_projects
+
+    rows = list_known_projects().get("projects") or []
+    return [{"name": str(r.get("name") or Path(str(r["path"])).name), "path": str(r["path"])}
+            for r in rows if r.get("source") == "uefn" and r.get("path")]
+
+
+def _match_island(value: str, islands: list[dict[str, str]]) -> str:
+    """The island path a name or path means (case-insensitive), else ''."""
+    want = value.strip().strip('"').replace("\\", "/").rstrip("/").lower()
+    for island in islands:
+        path = island["path"].replace("\\", "/").rstrip("/").lower()
+        if want in (island["name"].lower(), path, path.rsplit("/", 1)[-1]):
+            return island["path"]
+    return ""
+
+
+def _pick_island(value: Any, payload: dict[str, Any]) -> str:
+    """The Project pin: an island's name or path, or empty to ask the run's chat which."""
+    text = as_text(value).strip()
+    if text and Path(text).exists():
+        return text
+    islands = _uefn_projects()
+    if text:
+        path = _match_island(text, islands)
+        if not path:
+            names = ", ".join(i["name"] for i in islands) or "none found"
+            raise ValueError(f"Open UEFN project: no UEFN island called {text!r} (Ducky has: {names}).")
+        return path
+    if not islands:
+        raise ValueError("Open UEFN project: Ducky knows no UEFN islands to pick from.")
+    options = [(str(i), island["name"]) for i, island in enumerate(islands[:20])]
+    picked, typed = _ask_chat(payload, "Which island?", "Which UEFN island should this go into?", options, 30 * 60)
+    if picked.isdigit() and int(picked) < len(islands):
+        return islands[int(picked)]["path"]
+    path = _match_island(typed, islands) if typed else ""
+    if not path:
+        raise ValueError("Open UEFN project: no island was picked.")
+    return path
+
+
 def _uefn_node(node: dict[str, Any], ntype: str, label: str, cfg: dict[str, Any]) -> dict[str, Any]:
     timeout = float(cfg.get("timeout") or 180)
     project = str(cfg.get("project") or "").strip() or None
@@ -1263,6 +1314,8 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, 
             return {"ok": True, "id": node.get("id"), "type": ntype, "label": label, "result": {"max_tries": _repeat_tries(cfg)}}
         if ntype == "flow.branch":
             return {**_branch_node(cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
+        if ntype == "flow.choose":
+            return {**_choose_node(cfg, values, payload), "id": node.get("id"), "type": ntype, "label": label}
         if ntype == "tool.call":
             called = _call_tool(cfg, payload, str(node.get("id") or ""))
             result = called.get("result")
@@ -1294,6 +1347,9 @@ def _exec_node(node: dict[str, Any], payload: dict[str, Any], inputs: dict[str, 
             returned = (step.get("result") or {}).get("returned") if step.get("ok") else None
             return {**step, **({"outputs": dict(returned)} if isinstance(returned, dict) else {}), "id": node.get("id"), "type": ntype, "label": label}
         if ntype in ("uefn.open_project", "uefn.launch", "uefn.close", "uefn.restart", "uefn.wait_ready", "uefn.wait_window"):
+            if ntype == "uefn.open_project" and "project" in values:
+                # Wired (or set as {{spec.island}}): a name, a path, or empty to ask which island.
+                cfg = {**cfg, "project": _pick_island(values.get("project"), payload)}
             return _uefn_node(node, ntype, label, cfg)
         if ntype in _PLAY_TYPES:
             return {**_play_node(ntype, cfg, payload), "id": node.get("id"), "type": ntype, "label": label}
@@ -2233,17 +2289,78 @@ def _pipeline_finish(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
     files = payload.get("files") or []
     if not caller:
         return {"ok": True, "result": {"posted": False, "text": text, "files": files}}
+    if not _post_to_chat(caller, text, files):
+        return {"ok": False, "error": f"caller chat not found: {caller}"}
+    return {"ok": True, "result": {"posted": True, "caller_conv_id": caller, "text": text, "files": files}}
+
+
+def _post_to_chat(conv_id: str, text: str, files: Any) -> bool:
+    """Post text and its pictures into a chat as the assistant; False when the chat is gone."""
     from frontend.ui_web.project_chats import append_message, load_conversation
 
-    conv = load_conversation(caller)
+    conv = load_conversation(conv_id)
     if conv is None:
-        return {"ok": False, "error": f"caller chat not found: {caller}"}
+        return False
     attachments = _files_as_attachments(files)
     msg: dict[str, Any] = {"role": "assistant", "content": text, "text": text, "ts": time.time()}
     if attachments:
         msg["attachments"] = attachments
     append_message(conv, msg)
-    return {"ok": True, "result": {"posted": True, "caller_conv_id": caller, "text": text, "files": files}}
+    return True
+
+
+_CHOICES = (("use", "Use this"), ("retry", "Try again"), ("stop", "Stop"))
+_CHOOSE_WAIT_CAP_MIN = 1440
+
+
+def _ask_chat(payload: dict[str, Any], title: str, prompt: str, options: list[tuple[str, str]], timeout_s: float) -> tuple[str, str]:
+    """Ask the run's chat one question and wait: (picked option id, typed note).
+    ValueError says why there is no answer (no chat, no panel, timed out, skipped)."""
+    chat = run_chat() or str(payload.get("caller_conv_id") or "").strip()
+    if not chat:
+        raise ValueError(f"{title}: needs a chat to ask in. Run it from a chat or press play in the editor.")
+    from backend.panel.rpc import panel_rpc
+
+    question = {"id": "choice", "prompt": prompt or title, "allow_free_text": True, "required": True,
+                "options": [{"id": oid, "label": olabel} for oid, olabel in options]}
+    out = panel_rpc("ask_user", {"conv_id": chat, "title": title, "questions": [question]}, timeout=timeout_s)
+    if out.get("timed_out") or out.get("error") == "timeout":
+        raise ValueError(f"{title}: no answer in {round(timeout_s / 60)} min.")
+    if out.get("error") == "panel not open":
+        raise ValueError(f"{title}: needs a chat to ask in, and Ducky's panel isn't open.")
+    if out.get("error"):
+        raise ValueError(f"{title}: {out['error']}")
+    answer = (out.get("answers") or {}).get("choice") or {}
+    if out.get("skipped_all") or answer.get("skipped"):
+        return "", str(answer.get("text") or "")
+    picked = [str(s) for s in answer.get("selected") or []]
+    return (picked[0] if picked else ""), str(answer.get("text") or "").strip()
+
+
+def _choose_node(cfg: dict[str, Any], values: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Ask me to choose: show the pictures in the run's chat, then Use this (True), Try
+    again (False, with the typed note) or Stop (ends the run as stopped)."""
+    title = str(cfg.get("title") or "").strip() or "Choose"
+    raw = cfg.get("options")
+    labels = raw if isinstance(raw, list) else [part.strip() for part in str(raw or "").split(",")]
+    options = [(oid, str(labels[i]).strip() if i < len(labels) and str(labels[i]).strip() else default)
+               for i, (oid, default) in enumerate(_CHOICES)]
+    minutes = as_number(cfg.get("timeout_min") or 60)
+    minutes = 60 if isinstance(minutes, float) and not math.isfinite(minutes) else min(max(float(minutes), 1.0), _CHOOSE_WAIT_CAP_MIN)
+    images = values.get("images")
+    files = [f for f in (images if isinstance(images, list) else [images]) if f]
+    message = as_text(values.get("message")) or _as_text(_template(str(cfg.get("message") or ""), payload))
+    chat = run_chat() or str(payload.get("caller_conv_id") or "").strip()
+    if chat and (files or message):
+        _post_to_chat(chat, message or title, files)
+    choice, note = _ask_chat(payload, title, message, options, minutes * 60)
+    if choice not in ("use", "retry"):
+        cancel = _CANCEL.get()
+        if cancel is not None:
+            cancel.set()
+        return {"ok": False, "stopped": True, "error": STOPPED, "outputs": {"choice": "stop", "note": note}}
+    outputs = {"choice": choice, "note": note}
+    return {"ok": True, "branch": choice == "use", "outputs": outputs, "result": outputs}
 
 
 def _branch_node(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -2573,7 +2690,9 @@ def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any], wired: dict[str
     new_hub = ctx.get("group_id") and ctx.get("group_id") != payload.get("group_id")
     ident_token = _bind_hub_identity(ctx) if new_hub else None
     stack_token = _CALL_STACK.set((*stack, wid))
+    parent = _LIVE.get()  # the run whose Run workflow step this is: its log links to it
     live_token = _LIVE.set((wid, uuid.uuid4().hex[:12]))  # its own steps light up in its own editor
+    run_id = _LIVE.get()[1]
     started = time.time()
     try:
         steps, ok, error, _seen = _walk(nodes, edges, ctx, starts, flow=flow) if starts else ([], True, "", 0)
@@ -2588,8 +2707,9 @@ def _call_workflow(cfg: dict[str, Any], payload: dict[str, Any], wired: dict[str
 
             identity.reset(ident_token)
     # The called workflow's own log shows this run, so it can be debugged on its own.
-    append_run(wid, {"started": started, "ended": time.time(), "ok": ok, "error": error,
-                     "trigger_id": "workflow.call", "steps": steps})
+    append_run(wid, {"run": run_id, "started": started, "ended": time.time(), "ok": ok, "error": error,
+                     "trigger_id": "workflow.call", "steps": steps,
+                     **({"parent": {"workflow": parent[0], "run": parent[1]}} if parent else {})})
     if not ok:
         return {"ok": False, "error": f"{name}: {error}", "substeps": steps}
     returned = dict(ctx.get(_RETURN_KEY) or {})

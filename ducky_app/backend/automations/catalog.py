@@ -360,6 +360,26 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         ],
     },
     {
+        "type": "flow.choose",
+        "label": "Ask me to choose",
+        "group": "Logic",
+        "role": "action",
+        "description": (
+            "Posts the pictures to the run's chat and waits for you: Use this follows True, Try again follows False "
+            "(with what you typed as Note), Stop ends the run. Needs a chat to ask in."
+        ),
+        "inputs": [
+            {"id": "images", "label": "Pictures", "type": "images"},
+            {"id": "message", "label": "Message", "type": "text"},
+        ],
+        "outputs": [{"id": "choice", "label": "Choice", "type": "text"}, {"id": "note", "label": "Note", "type": "text"}],
+        "config_fields": [
+            {"id": "title", "label": "Title", "type": "string"},
+            {"id": "options", "label": "Button labels (Use this, Try again, Stop)", "type": "string"},
+            {"id": "timeout_min", "label": "Wait (minutes, max 1440)", "type": "number"},
+        ],
+    },
+    {
         "type": "tool.call",
         "label": "Call tool",
         "group": "Tools",
@@ -390,7 +410,11 @@ BUILTIN_NODES: list[dict[str, Any]] = [
         "label": "Open UEFN project",
         "group": "UEFN",
         "role": "action",
-        "description": "Start UEFN if closed, select this workspace and wait for the chosen island before continuing.",
+        "description": (
+            "Start UEFN if closed, select this workspace and wait for the chosen island before continuing. "
+            "Project (wired or typed): an island's name or folder; empty asks you which island. Already open: goes straight on."
+        ),
+        "inputs": [{"id": "project", "label": "Project", "type": "text", "description": "Island name or folder. Empty asks which."}],
         "config_fields": [
             {"id": "project", "label": "UEFN project", "type": "project"},
             {"id": "timeout", "label": "Ready timeout (seconds, max 300)", "type": "number"},

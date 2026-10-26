@@ -45,7 +45,7 @@ KIND_BY_EXT: dict[str, str] = {
 }
 # What the panel server may hand out through a link (no scripts, no archives).
 _SERVED = frozenset(KIND_BY_EXT) - {".exr", ".tga", ".tif", ".tiff", ".usd", ".usda", ".ply"}
-_RUNS_KEPT = 20
+_RUNS_KEPT = 100  # backstop: the run log (store.append_run) drops each run's files past its keep_runs
 _key_lock = threading.Lock()
 _key_cache: bytes = b""
 
@@ -67,7 +67,7 @@ def _safe(raw: str) -> str:
 
 def run_folder(workflow_id: str, run_id: str, node_id: str) -> Path:
     """Where one node of one run saves its files. Making a new run's folder drops the
-    oldest runs of that workflow beyond the last 20, so they never pile up."""
+    oldest runs of that workflow beyond the last 100, so they never pile up."""
     wf_dir = media_root() / _safe(workflow_id)
     run_dir = wf_dir / _safe(run_id)
     fresh = not run_dir.exists()
@@ -76,6 +76,14 @@ def run_folder(workflow_id: str, run_id: str, node_id: str) -> Path:
     if fresh:
         _prune_runs(wf_dir)
     return path
+
+
+def drop_run_folders(workflow_id: str, run_ids: list[str]) -> None:
+    """Delete these runs' files (runs the log no longer keeps)."""
+    wf_dir = media_root(for_write=False) / _safe(workflow_id)
+    for rid in run_ids:
+        if rid:
+            shutil.rmtree(wf_dir / _safe(rid), ignore_errors=True)
 
 
 def _prune_runs(wf_dir: Path) -> None:

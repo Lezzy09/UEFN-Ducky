@@ -509,6 +509,25 @@ def test_edit_image_sends_picture_and_prompt(tools, tmp_path):
     assert name == "meshy_image_to_image" and args["prompt"] == "add a hat" and args["image"].endswith("in.png")
 
 
+def test_edit_image_runs_on_any_image_gateway_that_takes_a_picture(tools, gateway, image_generators, monkeypatch, tmp_path):
+    image_generators.append({"id": "ducky_ai_gpt_image_1", "label": "Ducky AI · GPT Image 1", "tool": "ducky_ai_image", "credits": 1,
+                             "paid": True, "args": {"model": "gpt-image-1"}, "plugin_id": "account", "image_arg": "image"})
+    monkeypatch.setattr(media, "_gateway_node_spec", lambda node: {"accepts_image": True} if node == "openai.image" else {})
+    rows = media.backends_for("image.edit")
+    # Only the tools that take a picture, the account's first (the default), then Meshy; no Studio/Google rows.
+    assert [row["id"] for row in rows] == ["ducky_ai_gpt_image_1", "openai_image", "meshy_image_to_image"]
+    assert [row["id"] for row in rows if row.get("default")] == ["ducky_ai_gpt_image_1"]
+    picture = ref(png(tmp_path / "front.png"))
+    side = run("image.edit", {"spend": True}, {"image": picture, "prompt": "the side view"})
+    assert side["ok"], side
+    name, args = tools.calls[-1]
+    assert name == "ducky_ai_image" and args["image"] == picture["path"] and args["prompt"] == "the side view" and args["model"] == "gpt-image-1"
+    back = run("image.edit", {"backend": "openai_image", "spend": True}, {"image": picture, "prompt": "the back view"})
+    assert back["ok"], back
+    assert gateway[-1]["config"] == {"model": "gpt-image-1", "prompt": "the back view", "image": picture["path"]}
+    assert "ducky_ai_gpt_image_1" in {row["id"] for row in media.backends_for("image.generate")}  # still makes pictures from text
+
+
 @pytest.mark.parametrize("ntype, tool", [("image.remove_bg", "studio3d_remove_bg"), ("image.upscale", "studio3d_image_enhance")])
 def test_picture_cleanups(tools, tmp_path, ntype, tool):
     step = run(ntype, {"spend": True}, {"image": ref(png(tmp_path / "in.png"))})
@@ -1155,3 +1174,155 @@ def test_a_node_with_no_pick_runs_the_saved_default_maker(tools, monkeypatch):
     assert media.pick_backend("mesh.generate", "")["id"] == "tencent_rapid"
     saved["mesh"] = "nobody"
     assert media.pick_backend("mesh.generate", "")["id"] == "meshy_text_to_3d"
+
+
+# --------------------------------------------------------------------------- Ask me to choose
+
+
+@pytest.fixture
+def asked(monkeypatch):
+    """The panel's ask_user, stubbed: set ``answer`` to what the person picks."""
+    state: dict[str, Any] = {"answer": {"answers": {"choice": {"selected": ["use"], "text": ""}}}, "asks": [], "posts": []}
+
+    def fake_rpc(method, params, *, timeout):
+        state["asks"].append({"method": method, "params": params, "timeout": timeout})
+        return state["answer"]
+
+    monkeypatch.setattr("backend.panel.rpc.panel_rpc", fake_rpc)
+    monkeypatch.setattr(runner, "_post_to_chat", lambda conv, text, files: state["posts"].append((conv, text, files)) or True)
+    return state
+
+
+def _choose_graph() -> str:
+    return _save({"nodes": [
+        {"id": "go", "type": "start.manual", "config": {}},
+        {"id": "pick", "type": "flow.choose", "config": {"title": "Concept sheet", "message": "Use it?"}},
+        {"id": "yes", "type": "flow.output", "config": {"outputs": [{"name": "said", "value": "used"}]}},
+        {"id": "no", "type": "flow.output", "config": {"outputs": [{"name": "said", "value": "again: {{note}}"}]}},
+    ], "edges": [{"source": "go", "target": "pick", "kind": "main"},
+                 {"source": "pick", "target": "yes", "kind": "true"},
+                 {"source": "pick", "target": "no", "kind": "false"}]})
+
+
+def test_choose_use_follows_true_and_shows_the_pictures(asked, tmp_path):
+    sheet = png(tmp_path / "sheet.png")
+    step = runner._exec_node({"id": "c", "type": "flow.choose", "config": {"options": "Looks good, Redo, Quit"}},
+                             {"caller_conv_id": "chat-1"}, {"images": [ref(sheet)], "message": "Front view"})
+    assert step["ok"] and step["branch"] is True and step["outputs"] == {"choice": "use", "note": ""}
+    assert asked["posts"] == [("chat-1", "Front view", [ref(sheet)])]
+    params = asked["asks"][0]["params"]
+    assert asked["asks"][0]["method"] == "ask_user" and params["conv_id"] == "chat-1"
+    assert [(o["id"], o["label"]) for o in params["questions"][0]["options"]] == [("use", "Looks good"), ("retry", "Redo"), ("stop", "Quit")]
+    assert asked["asks"][0]["timeout"] == 3600
+    out = runner.run_workflow(_choose_graph(), caller_conv_id="chat-1")
+    assert out["ok"] and out["outputs"] == {"said": "used"}
+
+
+def test_choose_try_again_follows_false_with_the_note(asked):
+    asked["answer"] = {"answers": {"choice": {"selected": ["retry"], "text": "make it greener"}}}
+    out = runner.run_workflow(_choose_graph(), caller_conv_id="chat-1")
+    assert out["ok"] and out["outputs"] == {"said": "again: make it greener"}
+
+
+def test_choose_stop_ends_the_run_stopped(asked):
+    asked["answer"] = {"answers": {"choice": {"selected": ["stop"], "text": ""}}}
+    out = runner.run_workflow(_choose_graph(), caller_conv_id="chat-1")
+    assert not out["ok"] and out["error"] == runner.STOPPED and out["outputs"] == {}
+
+
+def test_choose_times_out_or_needs_a_chat(asked):
+    asked["answer"] = {"error": "timeout", "timed_out": True}
+    step = runner._exec_node({"id": "c", "type": "flow.choose", "config": {"timeout_min": 2}}, {"caller_conv_id": "chat-1"}, {})
+    assert not step["ok"] and "no answer in 2 min" in step["error"] and asked["asks"][0]["timeout"] == 120
+    step = runner._exec_node({"id": "c", "type": "flow.choose", "config": {}}, {}, {})
+    assert not step["ok"] and "needs a chat to ask in" in step["error"] and len(asked["asks"]) == 1
+    asked["answer"] = {"error": "panel not open"}
+    step = runner._exec_node({"id": "c", "type": "flow.choose", "config": {}}, {"caller_conv_id": "chat-1"}, {})
+    assert not step["ok"] and "needs a chat to ask in" in step["error"]
+
+
+def test_choose_stops_waiting_when_the_run_is_stopped(asked, monkeypatch):
+    import threading
+
+    release = threading.Event()
+
+    def slow_rpc(method, params, *, timeout):
+        release.wait(5)
+        return {"answers": {"choice": {"selected": ["use"]}}}
+
+    monkeypatch.setattr("backend.panel.rpc.panel_rpc", slow_rpc)
+    cancel = threading.Event()
+    token = runner._CANCEL.set(cancel)
+    try:
+        threading.Timer(0.2, cancel.set).start()
+        step = runner._exec_stoppable({"id": "c", "type": "flow.choose", "config": {}}, {"caller_conv_id": "chat-1"}, {})
+    finally:
+        runner._CANCEL.reset(token)
+        release.set()
+    assert step["stopped"] and step["error"] == runner.STOPPED
+
+
+# --------------------------------------------------------------------------- Open UEFN project: which island
+
+
+@pytest.fixture
+def islands(monkeypatch, tmp_path):
+    """Two UEFN islands on disk; UEFN already has Roguelike open."""
+    found = []
+    for name in ("Roguelike", "Tycoony"):
+        folder = tmp_path / "islands" / name
+        folder.mkdir(parents=True)
+        (folder / f"{name}.uefnproject").write_text("{}")
+        found.append({"name": name, "path": str(folder)})
+    monkeypatch.setattr(runner, "_uefn_projects", lambda: found)
+    seen: dict[str, Any] = {"ready": [], "launched": []}
+    monkeypatch.setattr("frontend.window_view._uefn_running", lambda: True)
+    monkeypatch.setattr("frontend.window_view.wait_uefn_ready", lambda root, timeout: seen["ready"].append(root) or {"ok": True})
+    monkeypatch.setattr("frontend.window_view.launch_uefn_project", lambda path: seen["launched"].append(path) or {"ok": True})
+    monkeypatch.setattr("frontend.ui_web.project_switch.switch_panel_project", lambda **_k: None)
+    return {"found": found, **seen}
+
+
+def test_open_project_takes_an_island_name_and_skips_the_launch_when_open(islands):
+    step = runner._exec_node({"id": "o", "type": "uefn.open_project", "config": {}}, {}, {"project": "roguelike"})
+    assert step["ok"] and step["result"]["already_running"] is True and islands["launched"] == []
+    assert Path(islands["ready"][0]).name == "Roguelike.uefnproject"
+    bad = runner._exec_node({"id": "o", "type": "uefn.open_project", "config": {}}, {}, {"project": "Nowhere"})
+    assert not bad["ok"] and "no UEFN island called 'Nowhere'" in bad["error"] and "Roguelike, Tycoony" in bad["error"]
+
+
+def test_open_project_asks_which_island_when_the_pin_is_empty(islands, asked):
+    asked["answer"] = {"answers": {"choice": {"selected": ["1"], "text": ""}}}
+    step = runner._exec_node({"id": "o", "type": "uefn.open_project", "config": {}}, {"caller_conv_id": "chat-1"}, {"project": ""})
+    assert step["ok"] and Path(islands["ready"][0]).name == "Tycoony.uefnproject"
+    options = asked["asks"][0]["params"]["questions"][0]["options"]
+    assert [o["label"] for o in options] == ["Roguelike", "Tycoony"]
+    asked["answer"] = {"answers": {"choice": {"selected": [], "text": "roguelike"}}}  # typed instead of picked
+    step = runner._exec_node({"id": "o", "type": "uefn.open_project", "config": {}}, {"caller_conv_id": "chat-1"}, {"project": ""})
+    assert step["ok"] and Path(islands["ready"][1]).name == "Roguelike.uefnproject"
+
+
+# --------------------------------------------------------------------------- Rig / Animate: backend auto
+
+
+def test_rig_auto_sends_humanoids_to_meshy_and_animals_to_tripo(tools, monkeypatch, media_backends):
+    from backend.uefn_plugins import host
+
+    media_backends.append(host._media_backend_row({"node": "mesh.rig", "id": "tripo_rig", "label": "Tripo", "tool": "tripo_rig",
+                                                    "credits": 25, "pins": {"mesh": "source"}, "stage": "rig"}, "tripo"))
+    media_backends.append(host._media_backend_row({"node": "mesh.animate", "id": "tripo_animate", "label": "Tripo", "tool": "tripo_animate",
+                                                    "credits": 10, "pins": {"mesh": "rig_task_id", "actions": "animations"},
+                                                    "task_args": {"mesh": "rig_task_id"}}, "tripo"))
+    listed = media.backends_for("mesh.rig")
+    assert [row["id"] for row in listed] == ["auto", "meshy_rig", "tripo_rig"] and listed[0]["available"]
+    mesh = ref(make_glb(Path(tools.tmp) / "in.glb"), "mesh")
+    assert media.auto_backend("mesh.rig", {"body": "humanoid"}, {})["id"] == "meshy_rig"
+    wolf = run("mesh.rig", {"backend": "auto", "spend": True}, {"mesh": mesh, "body": "quadruped"})
+    assert wolf["ok"] and tools.calls[-1][0] == "tripo_rig"
+    anim = run("mesh.animate", {"backend": "auto", "spend": True, "actions": "walk"}, {"mesh": wolf["outputs"]["mesh"]})
+    assert anim["ok"] and tools.calls[-1][0] == "tripo_animate"  # the plugin that rigged it
+    tools.off.add("meshy_rig")  # Meshy off: a humanoid goes to Tripo too
+    assert media.auto_backend("mesh.rig", {"body": "humanoid"}, {})["id"] == "tripo_rig"
+    tools.off.add("tripo_rig")
+    animal = run("mesh.rig", {"backend": "auto", "spend": True}, {"mesh": mesh, "body": "quadruped"})
+    assert not animal["ok"] and "needs the Tripo plugin" in animal["error"]

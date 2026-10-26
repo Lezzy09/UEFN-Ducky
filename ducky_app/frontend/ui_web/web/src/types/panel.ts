@@ -549,6 +549,10 @@ export interface AutomationRunDto {
   started?: number;
   ended?: number;
   trigger_id?: string;
+  /** The run picker's name for it (a run_title field or return), e.g. "Grey Wolf". */
+  title?: string;
+  /** A Run workflow step's run: the run that called it. */
+  parent?: { workflow: string; run: string };
   /** Values its Return nodes handed back. */
   outputs?: Record<string, unknown>;
   /** Each node's output pin values from this run (long text cut, files as file refs). */

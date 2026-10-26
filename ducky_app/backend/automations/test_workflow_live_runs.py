@@ -242,3 +242,47 @@ def test_a_shared_workflow_or_a_wired_command_still_asks(monkeypatch):
         finally:
             runner._CALL_STACK.reset(token)
     assert seen == [True, False, False]
+
+
+def test_each_run_keeps_its_files_and_title_until_the_log_drops_it(events, monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from backend.automations import files
+
+    monkeypatch.setattr(files, "media_root", lambda **_k: tmp_path / "media")
+    graph = {"nodes": [
+        {"id": "s", "type": "start.manual", "config": {}},
+        {"id": "pic", "type": "image.text", "config": {"inputs": {"text": "{{name}}"}}},
+        {"id": "out", "type": "flow.output", "config": {"outputs": [{"name": "run_title", "value": "{{name}}"}, {"name": "picture"}]}},
+    ], "edges": [{"source": "s", "target": "out", "kind": "main"},
+                 {"source": "pic", "target": "out", "kind": "data", "source_pin": "image", "target_pin": "picture"}]}
+    wid = str(store.save_workflow({"name": "Sheets", "graph": graph, "keep_runs": 2})["id"])
+    assert store.get_workflow(wid)["keep_runs"] == 2
+    for name in ("Grey Wolf", "Zombie", "Knight"):
+        assert runner.run_workflow(wid, payload={"name": name})["ok"]
+        if name == "Zombie":
+            first_two = store.get_workflow(wid)["runs"]
+            pictures = [Path(r["node_outputs"]["pic"]["image"]["path"]) for r in first_two]
+            assert [r["title"] for r in first_two] == ["Grey Wolf", "Zombie"]
+            assert pictures[0].parent != pictures[1].parent and all(p.is_file() for p in pictures)  # one folder per run
+    runs = store.get_workflow(wid)["runs"]
+    assert [r["title"] for r in runs] == ["Zombie", "Knight"]
+    assert not pictures[0].exists() and pictures[1].is_file()  # the dropped run's files went with it
+    assert store.clear_runs(wid)
+    assert not pictures[1].exists() and store.get_workflow(wid)["runs"] == []
+    assert store.keep_runs({"keep_runs": 500}) == 100 and store.keep_runs({}) == 20
+
+
+def test_a_called_workflows_run_names_the_run_that_called_it(events):
+    child = store.save_workflow({"name": "Spec", "graph": {"nodes": [
+        {"id": "out", "type": "flow.output", "config": {"outputs": [{"name": "run_title", "value": "Grey Wolf"}]}}], "edges": []}})
+    parent = store.save_workflow({"name": "Character", "graph": {"nodes": [
+        {"id": "s", "type": "start.manual", "config": {}},
+        {"id": "call", "type": "workflow.call", "config": {"workflow_id": child["id"]}},
+    ], "edges": [{"source": "s", "target": "call", "kind": "main"}]}})
+    out = runner.run_workflow(parent["id"])
+    assert out["ok"], out
+    called = store.get_workflow(child["id"])["runs"][-1]
+    assert called["parent"] == {"workflow": parent["id"], "run": out["run"]}
+    assert store.get_workflow(parent["id"])["runs"][-1]["title"] == "Grey Wolf"  # what Spec returned names the whole run
+    assert "parent" not in store.get_workflow(parent["id"])["runs"][-1]

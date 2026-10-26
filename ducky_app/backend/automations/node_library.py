@@ -146,7 +146,8 @@ LIBRARY: list[dict[str, Any]] = [
     # ------------------------------------------------------------------ Characters
     _node("mesh.rig", "Rig Humanoid Mesh", "Characters", "action",
           "Adds a skeleton to a textured humanoid model so it can be animated (walk and run included).",
-          inputs=[_MESH_IN, _pin("height", "Height (m)", "number")], outputs=[_MESH_OUT, _FILES_OUT], paid=True),
+          inputs=[_MESH_IN, _pin("height", "Height (m)", "number"), _pin("body", "Body (humanoid or quadruped)", "text")],
+          outputs=[_MESH_OUT, _FILES_OUT], paid=True),
     _node("mesh.animate", "Animate Rigged Mesh", "Characters", "action",
           "Applies up to ten animations from the backend's library to a character from its Rig node (one model per animation).",
           inputs=[_MESH_IN, _pin("actions", "Animations", "text")],

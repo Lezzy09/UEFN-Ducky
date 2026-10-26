@@ -125,6 +125,14 @@ function cardExtra(node: AutomationGraphNodeDto, pins: NodePins): number {
   return pins.outputs.some((pin) => pin.type === "image" || pin.type === "images") ? THUMB_EXTRA : 0;
 }
 
+/** The run picker's name for a run: its title and start time ("Grey Wolf · 13:40"), else its number and state. */
+function runLabel(run: { state: string; result?: AutomationRunDto }, index: number): string {
+  const title = (run.result?.title || "").trim();
+  if (!title) return `Run ${index + 1} · ${run.state}`;
+  const at = run.result?.started ? new Date(run.result.started * 1000) : null;
+  return at ? `${title} · ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}` : title;
+}
+
 /** What each node made, the newest run winning: a card keeps its last picture after a
  *  later run of it fails. */
 function madeByNode(runs: (AutomationRunDto | null | undefined)[]): Record<string, Record<string, unknown>> {
@@ -2462,7 +2470,7 @@ export function AutomationsView() {
                   value={visibleRun?.run || ""} onChange={pickRun} onOpen={() => setLogOpen(true)}
                   footer={<button type="button" className="icon-btn" aria-label="Clear finished runs" title="Clear finished run history"
                     disabled={!canClearRuns || clearingRuns} onClick={() => void clearLog()}><Icons.Trash /></button>}
-                  options={workflowRuns.map((run, index) => ({ value: run.run, label: `Run ${index + 1} · ${run.state}` }))} />
+                  options={workflowRuns.map((run, index) => ({ value: run.run, label: runLabel(run, index) }))} />
               ) : null}
               {visibleRun?.state === "running" ? (
                 <button type="button" ref={targetRef("workflows.toolbar.stop", { route: "workflows", label: "Stop the run" })} className="aw-stop" title={stopping ? "Stopping…" : "Stop: end this run now"} aria-label="Stop" disabled={stopping} onClick={() => void stopRun()}>

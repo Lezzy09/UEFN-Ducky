@@ -224,22 +224,41 @@ def _meshy(tool: str, label: str, credits: int, args: Args, bid: str = "", stage
     return {**row, "stage": stage} if stage else row
 
 
-def _gateway(plugin_id: str, node: str) -> dict[str, Any]:
-    """An AI gateway plugin's own image node, billed to the person's API key (no credits)."""
+def _gateway(plugin_id: str, node: str, *, edit: bool = False) -> dict[str, Any]:
+    """An AI gateway plugin's own image node, billed to the person's API key (no credits).
+    edit: on Edit Image, the input picture goes into its config as ``image``."""
     known = GATEWAY_IMAGES.get(plugin_id)
     name = _manifest_label(plugin_id) or (known[4] if known else plugin_id.title())
     bid, _label, model, key, _name = known or (f"{plugin_id}_image", f"{name} image", "", plugin_id, name)
     return {"id": bid, "label": f"{name} image", "plugin": name, "plugin_id": plugin_id, "node": node, "key": key, "model": model,
-            "config_fields": gateway_image_fields(node), "credits": 0, "paid": True, "args": _prompt}
+            "config_fields": gateway_image_fields(node), "credits": 0, "paid": True, "args": _image_and_prompt if edit else _prompt}
+
+
+_IMAGE_FIELDS = ("prompt", "image", "input_image")
+
+
+def _gateway_node_spec(node: str) -> dict[str, Any]:
+    try:
+        from backend.uefn_plugins.host import get_ui_contributions
+
+        return next((row for row in get_ui_contributions().get("automations_nodes", []) if row.get("id") == node), {})
+    except Exception:
+        return {}
+
+
+def gateway_takes_image(node: str) -> bool:
+    """The gateway's image node edits a picture: it says so (accepts_image) or has an image setting."""
+    spec = _gateway_node_spec(node)
+    fields = [f for f in spec.get("config_fields") or [] if isinstance(f, dict)]
+    return spec.get("accepts_image") is True or any(f.get("id") in _IMAGE_FIELDS[1:] or f.get("type") in ("image", "images") for f in fields)
 
 
 def gateway_image_fields(node: str) -> list[dict[str, Any]]:
     """Use the image handler's own controls, never the gateway's chat/agent models."""
     try:
-        from backend.uefn_plugins.host import get_ui_contributions
-
-        spec = next((row for row in get_ui_contributions().get("automations_nodes", []) if row.get("id") == node), {})
-        fields = [dict(field) for field in spec.get("config_fields", []) if field.get("id") != "prompt"]
+        spec = _gateway_node_spec(node)
+        fields = [dict(field) for field in spec.get("config_fields", []) if field.get("id") not in _IMAGE_FIELDS
+                  and field.get("type") not in ("image", "images")]
         for field in fields:
             if field.get("type") == "model":
                 field["type"] = "text"  # no image capability list: allow an explicit image model ID
@@ -277,10 +296,15 @@ def _declared(row: dict[str, Any]) -> dict[str, Any]:
     fields = [dict(field) for field in row.get("config_fields") or [] if isinstance(field, dict) and field.get("id")]
     allowed = {str(field["id"]) for field in fields}
 
+    image_arg = str(row.get("image_arg") or "")
+
     def args(inputs: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
         settings = ((cfg.get("gateway_config") or {}).get(row["id"]) or {}) if isinstance(cfg.get("gateway_config"), dict) else {}
         chosen = {key: value for key, value in settings.items() if key in allowed and value not in (None, "")} if isinstance(settings, dict) else {}
-        return {**fixed, **chosen, prompt_arg: _need_text(inputs, "prompt", "Prompt")}
+        out = {**fixed, **chosen, prompt_arg: _need_text(inputs, "prompt", "Prompt")}
+        if image_arg and path_of(inputs.get("image")):  # Edit Image: the picture it starts from
+            out[image_arg] = _need_file(inputs, "image", "Image")
+        return out
 
     out = {"id": row["id"], "label": row["label"], "plugin": _manifest_label(pid) or pid, "plugin_id": pid,
            "tool": row["tool"], "credits": int(row.get("credits") or 0), "args": args}
@@ -375,6 +399,12 @@ def table(ntype: str) -> list[dict[str, Any]]:
         rows = sorted((_declared(row) for row in plugin_image_generators()), key=lambda row: row["plugin_id"] != "account")
         rows.extend(_gateway(pid, node) for node, pid in gateway_image_nodes())
         return rows
+    if ntype == "image.edit":
+        # The same image tools when they take a reference picture (account first), then the built-in rows.
+        editors = [row for row in plugin_image_generators() if row.get("image_arg")]
+        rows = sorted((_declared(row) for row in editors), key=lambda row: row["plugin_id"] != "account")
+        rows.extend(_gateway(pid, node, edit=True) for node, pid in gateway_image_nodes() if gateway_takes_image(node))
+        return rows + list(BACKENDS["image.edit"]) + [_declared_media(row) for row in plugin_media_backends(ntype)]
     return list(BACKENDS.get(ntype) or []) + [_declared_media(row) for row in plugin_media_backends(ntype)]
 
 
@@ -564,6 +594,10 @@ def backends_for(ntype: str) -> list[dict[str, Any]]:
             **({"paid": True} if row.get("paid") is True else {}),
             **({"default": True} if row is first else {}),
         })
+    if ntype in _AUTO_NODES and out:
+        what = "by body: humanoid to Meshy, animals to Tripo" if ntype == "mesh.rig" else "the plugin that rigged it"
+        out.insert(0, {"id": AUTO, "label": f"Auto ({what})", "plugin": "Ducky", "plugin_id": "", "credits": 0,
+                       "cost": "What the picked backend costs", "available": any(row["available"] for row in out)})
     return out
 
 
@@ -605,6 +639,35 @@ def pick_backend(ntype: str, wanted: Any) -> dict[str, Any]:
     if ntype == "image.generate" and wanted:
         raise ValueError(f"Image backend {wanted} is unavailable. Choose a direct image backend in this node's details.")
     return _default_row(ntype, rows)
+
+
+AUTO = "auto"
+_AUTO_NODES = ("mesh.rig", "mesh.animate")
+
+
+def _plugin_row(rows: list[dict[str, Any]], plugin: str) -> dict[str, Any] | None:
+    return next((row for row in rows if plugin in str(row.get("plugin_id") or "") and is_ready(row)), None)
+
+
+def auto_backend(ntype: str, inputs: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """Backend auto. Rig: a humanoid goes to Meshy when it is on, else Tripo; any other
+    body (a quadruped, an animal) to Tripo, since Meshy rigs humanoids only. Animate: the
+    plugin that rigged the model."""
+    rows = table(ntype)
+    if ntype == "mesh.animate":
+        mesh = inputs.get("mesh")
+        mesh = mesh[0] if isinstance(mesh, list) and mesh else mesh
+        made = mesh if isinstance(mesh, dict) else {}
+        plugin = str(made.get("plugin_id") or ("meshy" if str(made.get("backend") or "").startswith("meshy") else ""))
+        return (_plugin_row(rows, plugin) if plugin else None) or pick_backend(ntype, "")
+    body = str(inputs.get("body") or cfg.get("body") or "humanoid").strip().lower()
+    if body in ("humanoid", "human", "biped"):
+        picked = _plugin_row(rows, "meshy") or _plugin_row(rows, "tripo")
+    else:
+        picked = _plugin_row(rows, "tripo")
+        if picked is None:
+            raise ValueError(f"Rig: a {body} body needs the Tripo plugin (Meshy rigs humanoids only). Turn Tripo on in the Store.")
+    return picked or pick_backend(ntype, "")
 
 
 def _parse(raw: Any) -> dict[str, Any]:
@@ -651,7 +714,7 @@ def _remote(data: dict[str, Any], kind: str) -> str:
 def run_media(ntype: str, cfg: dict[str, Any], inputs: dict[str, Any], folder: Path) -> dict[str, Any]:
     """Run one image / 3D node on the backend picked in its details. With "Try the
     next backend if it fails" on, a failure moves on to the next one that is set up."""
-    first = pick_backend(ntype, cfg.get("backend"))
+    first = auto_backend(ntype, inputs, cfg) if cfg.get("backend") == AUTO else pick_backend(ntype, cfg.get("backend"))
     if ntype == "mesh.animate":
         return _run_animations(first, cfg, inputs, folder)
     if cfg.get("fallback") is not True:
@@ -718,7 +781,8 @@ def _run_gateway(ntype: str, backend: dict[str, Any], cfg: dict[str, Any], input
         settings = (cfg.get("gateway_config") or {}).get(backend["id"], {})
         allowed = {field["id"] for field in backend["config_fields"]}
         settings = {key: value for key, value in settings.items() if key in allowed and value not in (None, "")}
-        data = handler({"config": {"model": backend["model"], **settings, "prompt": args["prompt"]}, "payload": {}})
+        picture = {"image": args["image"]} if args.get("image") else {}
+        data = handler({"config": {"model": backend["model"], **settings, "prompt": args["prompt"], **picture}, "payload": {}})
     except Exception as exc:  # noqa: BLE001 - a plugin's failure is this node's error
         return {"ok": False, "error": f"{backend['label']}: {exc}"}
     if not isinstance(data, dict) or not data.get("ok"):

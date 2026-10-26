@@ -160,6 +160,14 @@ describe("saved run history", () => {
     expect(document.querySelector(".aw-log-dock-body")?.textContent).toContain("Starting…");
     expect(screen.getByRole("button", { name: "Stop", exact: true })).toBeTruthy();
   });
+  it("names a past run by its title and start time and opens it", async () => {
+    saved.runs![0] = { ...saved.runs![0], title: "Grey Wolf", started: new Date(2026, 9, 25, 13, 40).getTime() / 1000 };
+    await open();
+    dropdown("Workflow run");
+    expect(screen.getByRole("radio", { name: "Run 1 · error" })).toBeTruthy();  // an untitled run keeps its number (runs in start order)
+    fireEvent.click(screen.getByRole("radio", { name: "Grey Wolf · 13:40" }));
+    expect(document.querySelector(".aw-log-dock-body")?.textContent).toContain("First attempt ok");
+  });
   it("follows a new test run after viewing an earlier result", async () => {
     api.run_workflow.mockResolvedValue({ run: "new-test", ok: true, steps: [{ label: "New test", ok: true }] });
     await open();
