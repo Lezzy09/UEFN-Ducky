@@ -113,6 +113,7 @@ _shared: dict[str, dict[str, dict[str, Any]]] = {}  # plugin -> key -> {v, ver, 
 _shared_sent: dict[str, float] = {}  # plugin -> when the leader last sent them all again
 _marks: dict[tuple[str, str, str], float] = {}  # (account, space, plugin) -> newest write sent live
 _outbox: list[threading.Thread] = []
+_beating: dict[tuple[str, str], bool] = {}  # (account, space) -> a beat is going; True: one more after it
 
 
 def _push(event: dict[str, Any]) -> None:
@@ -211,18 +212,34 @@ def room_of(plugin: str, account: str, space: str) -> dict[str, Any] | None:
 
 
 def _beat_soon(account: str, space: str) -> None:
-    """Presence carries the room: tell the team now instead of at the next minute's beat."""
-    def work() -> None:
-        try:
-            from backend.store.repos import plugin_data as repo
-            from backend.uefn_plugins import spaces, vcs_engine
+    """Presence carries the room: tell the team now instead of at the next minute's beat. One
+    beat a space at a time, and one more after it when the room moved while it went: two at
+    once (Join leaves one room and goes into another) could land the older last, and the team
+    would see this PC where it no longer is until the scheduler's next beat."""
+    key = (account, space)
+    with _lock:
+        if key in _beating:
+            _beating[key] = True
+            return
+        _beating[key] = False
 
-            plugins = sorted(p for p, s in repo.links(account).items() if s == space)
-            team = spaces.ledgers(account, space, plugins)
-            if team:
-                vcs_engine.beat(account, space, next(iter(team.values())), list(team), force=True)
-        except Exception:  # noqa: BLE001 — the scheduler's next beat says it anyway
-            _log.debug("live beat failed", exc_info=True)
+    def work() -> None:
+        while True:
+            try:
+                from backend.store.repos import plugin_data as repo
+                from backend.uefn_plugins import spaces, vcs_engine
+
+                plugins = sorted(p for p, s in repo.links(account).items() if s == space)
+                team = spaces.ledgers(account, space, plugins)
+                if team:
+                    vcs_engine.beat(account, space, next(iter(team.values())), list(team), force=True)
+            except Exception:  # noqa: BLE001 — the scheduler's next beat says it anyway
+                _log.debug("live beat failed", exc_info=True)
+            with _lock:
+                if not _beating.get(key):
+                    _beating.pop(key, None)
+                    return
+                _beating[key] = False
 
     threading.Thread(target=work, name="live-beat", daemon=True).start()
 
@@ -1403,6 +1420,7 @@ def reset_for_tests() -> None:
         _shared.clear()
         _shared_sent.clear()
         _marks.clear()
+        _beating.clear()
 
 
 class LiveApi:

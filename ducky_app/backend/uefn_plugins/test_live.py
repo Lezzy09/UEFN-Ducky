@@ -361,6 +361,42 @@ def test_a_space_is_live_while_one_of_its_plugins_is(team: dict[str, Any]) -> No
     assert live.spaces_live() == set()
 
 
+def test_presence_goes_one_beat_at_a_time_and_again_when_the_room_moved_meanwhile(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Join leaves one room and goes into another: two beats at once could land the older
+    last, so the team would see this PC where it no longer is."""
+    gate, beats = threading.Event(), []
+
+    def beat(account: str, space: str, backend: Any, plugins: list[str], *, force: bool = False) -> dict[str, Any]:
+        beats.append(force)
+        if len(beats) == 1:
+            gate.wait(5)
+        return {"ok": True}
+
+    monkeypatch.setattr(repo, "links", lambda account: {PLUGIN: SPACE})
+    monkeypatch.setattr(spaces, "ledgers", lambda account, space, plugins: {PLUGIN: object()})
+    monkeypatch.setattr(vcs_engine, "beat", beat)
+    live.reset_for_tests()
+
+    def settled(n: int) -> bool:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and (len(beats) < n or live._beating):
+            time.sleep(0.01)
+        return len(beats) == n and not live._beating
+
+    live._beat_soon("acct", SPACE)
+    while not beats:
+        time.sleep(0.01)
+    live._beat_soon("acct", SPACE)  # the room moved while the first beat went
+    live._beat_soon("acct", SPACE)
+    assert beats == [True]  # one at a time
+    gate.set()
+    assert settled(2)  # one more, after it: it reads the room now
+    live._beat_soon("acct", SPACE)
+    assert settled(3) and beats == [True, True, True]  # nothing going: at once
+    live.reset_for_tests()
+
+
 def test_switching_to_local_ends_live(team: dict[str, Any]) -> None:
     live.join(PLUGIN)
     repo.link_set(team["account"], PLUGIN, scopes.PERSONAL)

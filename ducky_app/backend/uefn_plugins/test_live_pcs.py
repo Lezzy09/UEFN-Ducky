@@ -1,0 +1,450 @@
+"""Live groups across PCs: each PC its own process with its own database, device and person,
+running the real core (``live``, the version engine, plugin data) and driven through the
+panel API methods a plugin's pages call. The test joins them like the services would:
+
+- the team server (:class:`FakeLedgerServer`): each PC syncs and beats presence with it, and
+  a PC whose presence changed has the others beat again (as the next heads would show it);
+- the live link: a frame goes to the PCs live in the sender's room, or to one PC (``to``),
+  and arrives as the provider's ``deliver``.
+
+What is checked is what the people see: Start live puts them in one group, shared values and
+live states go both ways through the leader, a groupmate's change reaches the group at once
+and goes to the server from the leader under its maker's name, and the group passes on when
+its host leaves and ends for the last one in it.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+from multiprocessing.connection import Client, Listener
+from pathlib import Path
+from typing import Any, Callable
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI")
+
+APP = Path(__file__).resolve().parents[2]  # ducky_app
+SPACE, PLUGIN = "spaceT", "cards"
+AUTH = b"ducky-live-pcs"
+WAIT_S = 20.0
+LEDGER_METHODS = ("capabilities", "heads", "push", "pull", "fetch", "history", "revert", "lock", "unlock",
+                  "break_lock", "ask", "beat")
+
+
+# --------------------------------------------------------------------------- one PC (a child process)
+
+
+def pc_main(address: tuple[str, int], name: str) -> None:
+    """A PC: signs in as ``name``, has ``cards`` on the team copy, and does what the test says."""
+    from frontend import duckyos_account
+    from frontend.ui_web import panel_api  # noqa: F401  (panel_api_store loads with it)
+    from frontend.ui_web.panel_api_store import PanelApiStoreMixin
+
+    from backend.store.repos import plugin_data as repo
+    from backend.store.repos import space_vcs
+    from backend.uefn_plugins import data_crypto, live, scopes, spaces, sync_scheduler, vcs_engine
+    from backend.uefn_plugins.ledger import OutgoingChangeset
+    from backend.uefn_plugins.scopes import PluginData
+
+    key = f"https://uefnducky.org|{name.lower()}@example.com"
+    user = "u_" + name.lower()
+    duckyos_account.account_key = lambda blob=None: key
+    data_crypto._fetch_adk = lambda: hashlib.sha256(b"adk/" + key.encode()).digest()
+    vcs_engine.my_user_id = lambda: user
+    vcs_engine.device_label = lambda: f"{name}-PC"
+    account = scopes.account_id()
+    device = space_vcs.device_id()
+
+    def dial(role: str) -> Any:
+        conn = Client(address, authkey=AUTH)
+        conn.send(("hello", name, role, device, user))
+        return conn
+
+    svc, evt, ctl = dial("svc"), dial("evt"), dial("ctl")
+    svc_lock = threading.Lock()
+
+    def rpc(*req: Any) -> Any:
+        with svc_lock:
+            svc.send(req)
+            ok, res = svc.recv()
+        if ok != "ok":
+            raise RuntimeError(res)
+        return res
+
+    def plain(a: Any) -> Any:  # an upload's contents read here (a reader can't cross processes)
+        if isinstance(a, OutgoingChangeset):
+            return dataclasses.replace(a, items=tuple(
+                dataclasses.replace(i, data=i.read(), reader=None, path="") if i.op == "put" else i
+                for i in a.items))
+        return a
+
+    def call(method: str) -> Callable[..., Any]:
+        return lambda self, *args, **kwargs: rpc("ledger", method, tuple(plain(a) for a in args), kwargs)
+
+    # The team server, from this PC: each call runs on the hub's FakeLedger client.
+    remote = type("Remote", (), {m: call(m) for m in LEDGER_METHODS})()
+
+    class Provider(spaces.Provider):
+        kind_label = "team"
+
+        def enabled(self) -> bool:
+            return True
+
+        def ledger(self, account: str, space_id: str, plugin: str) -> Any:
+            return remote
+
+        def live_supported(self) -> bool:
+            return True
+
+        def live_join(self, account: str, space_id: str, plugin: str, room: str) -> None:
+            rpc("room", room)
+
+        def live_leave(self, account: str, space_id: str, plugin: str) -> None:
+            rpc("room", "")
+
+        def live_send(self, account: str, space_id: str, plugin: str, topic: str, data: Any, *, to: str = "",
+                      fast: bool = False) -> int:
+            return int(rpc("send", topic, json.loads(json.dumps(data)), to))
+
+        def live_state(self, account: str, space_id: str, plugin: str) -> dict[str, Any]:
+            return {"state": "live", "peers": rpc("peers")}
+
+    spaces.install_for_tests(Provider())
+    repo.link_set(account, PLUGIN, SPACE)
+    repo.sync_put(account, SPACE, label="Alpha", synced_at=time.time())
+    space_vcs.head_put(account, SPACE, PLUGIN, engine="v2")
+    scopes.data_live = lambda plugin: plugin == PLUGIN
+    live._push = lambda event: None
+    rounds = threading.Lock()
+
+    def sync() -> dict[str, Any]:
+        with rounds:
+            return vcs_engine.run(account, SPACE, PLUGIN, remote, force=True)
+
+    def beat() -> dict[str, Any]:
+        return vcs_engine.beat(account, SPACE, remote, [PLUGIN], force=True)
+
+    def later(fn: Callable[[], Any]) -> None:
+        def run() -> None:
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 — the test sees what didn't happen
+                print(f"{name}: {getattr(fn, '__name__', fn)} failed: {exc!r}", flush=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    sync_scheduler.wake = lambda a, s, p=None: later(sync)
+
+    def events() -> None:
+        while True:
+            try:
+                msg = evt.recv()
+            except (EOFError, OSError):
+                return
+            if msg[0] == "frame":
+                try:
+                    live.deliver(account, SPACE, PLUGIN, msg[1], msg[2], msg[3])
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{name}: deliver {msg[2]} failed: {exc!r}", flush=True)
+            elif msg[0] == "rebeat":
+                later(beat)
+
+    threading.Thread(target=events, daemon=True).start()
+    data = PluginData(PLUGIN)
+    api = PanelApiStoreMixin()
+
+    def ai_put(k: str, v: Any, ducky: str) -> None:  # one of this person's duckies, from a tool call
+        with scopes.write_group(PLUGIN, actor="agent", ducky=ducky, message="cards_tune"):
+            data.put(k, v)
+
+    def row(k: str) -> dict[str, Any] | None:
+        r = repo.get(account, SPACE, PLUGIN, "doc", k)
+        return None if r is None else {"dirty": int(r["dirty"]), "rev": int(r["rev"])}
+
+    commands: dict[str, Callable[..., Any]] = {
+        "start": lambda: api.plugin_live_join(PLUGIN),
+        "leave": lambda: api.plugin_live_leave(PLUGIN),
+        "status": lambda: api.plugin_live_status(PLUGIN),
+        "put": data.put,
+        "ai_put": ai_put,
+        "get": data.get,
+        "row": row,
+        "sync": sync,
+        "beat": beat,
+        "share": lambda k, v: api.plugin_live_share(PLUGIN, k, v),
+        "shared": lambda: api.plugin_live_shared(PLUGIN)["values"],
+        "set_state": lambda s: api.plugin_live_set_my_state(PLUGIN, s),
+        "member_states": lambda: api.plugin_live_member_states(PLUGIN)["states"],
+        "history": lambda: spaces.team_history(PLUGIN, limit=10)["entries"],
+    }
+    beat()
+    ctl.send(("ok", "ready"))
+    while True:
+        try:
+            cmd, args = ctl.recv()
+        except (EOFError, OSError):
+            break
+        if cmd == "exit":
+            live.leave_all()
+            ctl.send(("ok", None))
+            break
+        try:
+            ctl.send(("ok", commands[cmd](*args)))
+        except Exception as exc:  # noqa: BLE001 — handed to the test
+            ctl.send(("err", f"{type(exc).__name__}: {exc}"))
+    os._exit(0)
+
+
+# --------------------------------------------------------------------------- the hub (the test process)
+
+
+class PC:
+    """A PC as the test drives it: ``pc("put", "card.a", {...})``."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.device = self.user = self.room = ""
+        self.presence: Any = None
+        self.ctl: Any = None
+        self.evt: Any = None
+        self.ledger: Any = None
+        self.evt_lock = threading.Lock()
+        self.proc: subprocess.Popen[bytes] | None = None
+
+    def __call__(self, cmd: str, *args: Any) -> Any:
+        self.ctl.send((cmd, args))
+        ok, res = self.ctl.recv()
+        if ok != "ok":
+            raise AssertionError(f"{self.name} {cmd}: {res}")
+        return res
+
+    def who(self) -> dict[str, str]:
+        return {"name": self.name, "user": self.user, "device": self.device, "label": f"{self.name}-PC"}
+
+    def tell(self, *msg: Any) -> None:
+        with self.evt_lock:
+            self.evt.send(msg)
+
+
+class Hub:
+    def __init__(self, tmp: Path) -> None:
+        from backend.uefn_plugins.ledger_conformance import FakeLedgerServer
+
+        self.server = FakeLedgerServer()
+        self.listener = Listener(("127.0.0.1", 0), authkey=AUTH)
+        self.pcs: dict[str, PC] = {}
+        self.tmp = tmp
+        self.quiet = False  # teammates don't see presence change until :meth:`speak`
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def speak(self) -> None:
+        """Presence goes round again: every PC beats and sees everyone's."""
+        self.quiet = False
+        for pc in self.pcs.values():
+            pc.tell("rebeat")
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn = self.listener.accept()
+            except OSError:
+                return
+            _, name, role, device, user = conn.recv()
+            pc = self.pcs[name]
+            pc.device, pc.user = device, user
+            if role == "svc":
+                pc.ledger = self.server.client(user, device, name=name)
+                threading.Thread(target=self._serve, args=(pc, conn), daemon=True).start()
+            elif role == "evt":
+                pc.evt = conn
+            else:
+                pc.ctl = conn
+
+    def _serve(self, pc: PC, conn: Any) -> None:
+        while True:
+            try:
+                req = conn.recv()
+            except (EOFError, OSError):
+                return
+            try:
+                res = ("ok", self._handle(pc, req))
+            except Exception as exc:  # noqa: BLE001 — the PC raises it
+                res = ("err", f"{type(exc).__name__}: {exc}")
+            conn.send(res)
+
+    def _handle(self, pc: PC, req: tuple[Any, ...]) -> Any:
+        kind = req[0]
+        if kind == "ledger":
+            method, args, kwargs = req[1], req[2], req[3]
+            got = getattr(pc.ledger, method)(*args, **kwargs)
+            if method == "beat" and args[1] != pc.presence and not self.quiet:
+                pc.presence = args[1]
+                for other in self.pcs.values():  # teammates see it at their next look: now
+                    if other is not pc and other.evt is not None:
+                        other.tell("rebeat")
+            return got
+        if kind == "room":
+            pc.room = str(req[1])
+            return None
+        if kind == "peers":
+            return [{**p.who(), "path": "direct"} for p in self._room(pc)]
+        if kind == "send":
+            topic, data, to = req[1], req[2], req[3]
+            targets = [p for p in self._room(pc) if not to or p.device == to]
+            for p in targets:
+                p.tell("frame", pc.who(), topic, data)
+            return len(targets)
+        raise ValueError(f"unknown request {kind}")
+
+    def _room(self, pc: PC) -> list[PC]:
+        return [p for p in self.pcs.values() if p is not pc and pc.room and p.room == pc.room]
+
+    def start(self, name: str) -> PC:
+        pc = self.pcs[name] = PC(name)
+        root = self.tmp / name
+        (root / "Roaming").mkdir(parents=True)
+        env = {**os.environ, "LOCALAPPDATA": str(root), "APPDATA": str(root / "Roaming"),
+               "UEFN_DUCKY_DOCUMENTS_DIR": str(root / "docs"), "PYTHONPATH": str(APP)}
+        env.pop("UEFN_DUCKY_MCP_BRIDGE", None)
+        code = ("import sys, importlib.util; sys.path.insert(0, sys.argv[1]);"
+                "spec = importlib.util.spec_from_file_location('live_pcs', sys.argv[2]);"
+                "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m);"
+                "m.pc_main((sys.argv[3], int(sys.argv[4])), sys.argv[5])")
+        host, port = self.listener.address
+        pc.proc = subprocess.Popen([sys.executable, "-c", code, str(APP), str(Path(__file__).resolve()), host,
+                                    str(port), name], cwd=str(root), env=env)
+        deadline = time.monotonic() + 60
+        while pc.ctl is None:
+            if time.monotonic() > deadline or pc.proc.poll() is not None:
+                raise AssertionError(f"{name} didn't start")
+            time.sleep(0.05)
+        ok, res = pc.ctl.recv()
+        assert (ok, res) == ("ok", "ready"), res
+        return pc
+
+    def close(self) -> None:
+        for pc in self.pcs.values():
+            try:
+                pc("exit")
+            except Exception:  # noqa: BLE001 — gone already
+                pass
+            if pc.proc is not None:
+                try:
+                    pc.proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    pc.proc.kill()
+        self.listener.close()
+        self.server.rmtree()
+
+
+def until(check: Callable[[], Any], what: str, timeout: float = WAIT_S) -> Any:
+    deadline = time.monotonic() + timeout
+    last: Any = None
+    while time.monotonic() < deadline:
+        last = check()
+        if last:
+            return last
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for {what} (last: {last!r})")
+
+
+@pytest.fixture
+def hub(tmp_path: Path):
+    h = Hub(tmp_path)
+    yield h
+    h.close()
+
+
+def _mine(pc: PC) -> dict[str, Any]:
+    return next((g for g in pc("status")["groups"] if g["mine"]), {})
+
+
+def _go_live(pc: PC, host: PC) -> None:
+    """``pc`` presses Start live once it sees ``host``'s group: it goes into it."""
+    until(lambda: any(g["room"] == f"h:{host.device}" for g in pc("status")["groups"]),
+          f"{pc.name} to see {host.name}'s group")
+    assert pc("start")["room"] == f"h:{host.device}"
+
+
+# --------------------------------------------------------------------------- what the people see
+
+
+def test_two_pcs_go_live_together_share_and_sync_through_the_leader(hub: Hub) -> None:
+    ana, ben = hub.start("Ana"), hub.start("Ben")
+    # Connect: Ana starts live; Ben's Start live goes into her group, not a second one.
+    assert ana("start")["room"] == f"h:{ana.device}"
+    _go_live(ben, ana)
+    until(lambda: len(_mine(ana).get("members", [])) == 2, "Ana's group to have Ben")
+    mine = _mine(ben)
+    assert mine["hostDevice"] == ana.device and not mine["hostIsMe"] and _mine(ana)["hostIsMe"]
+    assert [(p["name"], p["path"]) for p in ben("status")["peers"]] == [("Ana", "direct")]
+    # API: a shared value goes both ways through the leader; each PC's live state reaches the other.
+    assert ana("share", "player", {"playing": True, "t": 12})["ok"]
+    until(lambda: (ben("shared").get("player") or {}).get("value") == {"playing": True, "t": 12},
+          "Ben to get the player")
+    assert ben("share", "clip", "c2")["ok"]
+    until(lambda: (ana("shared").get("clip") or {}).get("value") == "c2", "Ana to get Ben's clip")
+    assert ana("shared")["clip"]["by"]["name"] == "Ben" and ben("shared")["clip"]["value"] == "c2"
+    assert ben("set_state", {"cam": [1, 2, 3]})["ok"]
+    until(lambda: [s["state"] for s in ana("member_states")] == [{"cam": [1, 2, 3]}], "Ana to see Ben's camera")
+    # Data: Ben's change reaches Ana at once; Ana, the leader, sends it under Ben's name.
+    ben("put", "card.pip", {"hp": 3})
+    until(lambda: ana("get", "card.pip") == {"hp": 3}, "Ana to get Ben's change live")
+    assert ana("row", "card.pip")["dirty"] == 1  # the leader's to send
+    ben("sync")
+    assert not hub.server.space(SPACE).repo(PLUGIN).changesets  # Ben held it: the leader sends it
+    assert ana("sync")["pushed"] == 1
+    until(lambda: (ben("sync"), ben("row", "card.pip")["dirty"] == 0)[1], "the leader's commit to settle Ben's")
+    (entry,) = [e for e in ben("history") if ["doc", "card.pip"] in e["items"]]
+    assert (entry["by"], entry["via"], entry["device"], entry["actor"]) == ("Ben", "Ana", "Ben-PC", "user")
+    # Ben's ducky: its change goes through the leader too, and History says it was Ben's AI.
+    ben("ai_put", "card.ai", {"hp": 9}, "Verse Generator")
+    until(lambda: ana("get", "card.ai") == {"hp": 9}, "Ana to get the ducky's change live")
+    assert ana("sync")["pushed"] == 1
+    (entry,) = [e for e in ben("history") if ["doc", "card.ai"] in e["items"]]
+    assert (entry["by"], entry["via"], entry["actor"], entry["ducky"]) == ("Ben", "Ana", "agent", "Verse Generator")
+    # Ana's own change: hers, sent by her, at Ben's at once.
+    ana("put", "card.zed", {"hp": 1})
+    until(lambda: ben("get", "card.zed") == {"hp": 1}, "Ben to get Ana's change live")
+    assert ben("row", "card.zed")["dirty"] == 0
+    ana("sync")
+    newest = ana("history")[0]
+    assert ["doc", "card.zed"] in newest["items"] and newest["by"] == "Ana" and "via" not in newest
+
+
+def test_the_group_passes_on_when_its_host_leaves_and_ends_for_the_last_one(hub: Hub) -> None:
+    ana, ben, cy = hub.start("Ana"), hub.start("Ben"), hub.start("Cy")
+    ana("start")
+    _go_live(ben, ana)
+    until(lambda: len(_mine(ana).get("members", [])) == 2, "Ben in Ana's group")
+    _go_live(cy, ana)  # Ben joined first: he has been in it longest
+    until(lambda: len(_mine(ana).get("members", [])) == 3, "all three in Ana's group")
+    ana("leave")
+    until(lambda: _mine(cy).get("hostDevice") == ben.device, "the group to pass to Ben")
+    assert _mine(ben)["hostIsMe"]
+    assert not ana("status")["on"] and ana("status")["rejoin"] == ""
+    # Ben leads now: Cy's value goes through him.
+    assert cy("share", "clip", "c7")["ok"]
+    until(lambda: (ben("shared").get("clip") or {}).get("value") == "c7", "Ben to take Cy's value")
+    ben("leave")
+    until(lambda: cy("status")["on"] is False, "Live to end for Cy, left alone")
+    assert cy("status")["rejoin"] == ""
+
+
+def test_two_pcs_that_start_live_at_once_end_up_in_one_group(hub: Hub) -> None:
+    ana, ben = hub.start("Ana"), hub.start("Ben")
+    hub.quiet = True
+    assert ana("start")["room"] == f"h:{ana.device}"
+    assert ben("start")["room"] == f"h:{ben.device}"  # neither saw the other yet
+    hub.speak()
+    low = min((ana, ben), key=lambda p: p.device)
+    until(lambda: _mine(ana).get("room") == _mine(ben).get("room") == f"h:{low.device}", "one group")
+    assert len(_mine(ana)["members"]) == len(_mine(ben)["members"]) == 2

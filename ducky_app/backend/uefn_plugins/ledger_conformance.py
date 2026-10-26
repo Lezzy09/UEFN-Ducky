@@ -33,6 +33,8 @@ The server rules modelled (and checked):
 - a beat answers the roster (live presence) and live locks;
 - a commit and a beat name the caller's device: the lock that device holds is the one
   its commits carry the fence of, and its roster row carries that device id;
+- a changeset a live group's leader sends for a groupmate (``author``, ``author_pc``) comes
+  back with them on pull and history;
 - folder files (``tree``) are read from the plaintext path core names (a ``\\\\?\\`` path
   on Windows) and come back with the exact ``meta`` core sent (``relpath``, ``mtime_ns``);
   two clients of one team give a file and a unit the same hashed name, and a lock on a
@@ -113,9 +115,10 @@ def del_item(kind: str, key: str, *, base: int, unit: str = "") -> OutgoingItem:
 
 def changeset(*items: OutgoingItem, base: int = 0, device: str = "", cs_id: str = "", message: str = "",
               fences: Mapping[str, int] | None = None, group: str = "", part: int = 1,
-              last: bool = True) -> OutgoingChangeset:
+              last: bool = True, author: str = "", author_pc: str = "") -> OutgoingChangeset:
     return OutgoingChangeset(cs_id=cs_id or uuid.uuid4().hex, base_seq=base, items=tuple(items), device=device,
-                             message=message, fences=dict(fences or {}), group=group, part=part, last=last)
+                             message=message, fences=dict(fences or {}), group=group, part=part, last=last,
+                             author=author, author_pc=author_pc)
 
 
 # --------------------------------------------------------------------------- the fake server
@@ -150,6 +153,8 @@ class _Changeset:
     part: int
     last: bool
     items: list[_Version]
+    author: str = ""  # the groupmate a live group's leader sent it for, and their PC
+    author_pc: str = ""
 
 
 @dataclass
@@ -298,7 +303,8 @@ class FakeLedger:
                             by=self.server.names.get(v.by, v.by), at=v.at, data=data, path=path, meta=dict(v.meta))
 
     def _commit(self, sp: _Space, plugin: str, versions: list[_Version], *, cs_id: str, device: str, actor: str = "user",
-                ducky: str = "", message: str = "", group: str = "", part: int = 1, last: bool = True) -> int:
+                ducky: str = "", message: str = "", group: str = "", part: int = 1, last: bool = True,
+                author: str = "", author_pc: str = "") -> int:
         repo = sp.repo(plugin)
         seq = repo.head + 1
         repo.head = seq
@@ -310,7 +316,7 @@ class FakeLedger:
             repo.created.setdefault((v.kind, v.key), seq)
             repo.units[v.unit] = (seq, v.by, now)
         repo.changesets[seq] = _Changeset(seq, cs_id, self.user, device, now, actor, ducky, message, group, part, last,
-                                          versions)
+                                          versions, author, author_pc)
         sp.csids[cs_id] = (plugin, seq)
         return seq
 
@@ -404,7 +410,8 @@ class FakeLedger:
             ]
             seq = self._commit(sp, plugin, versions, cs_id=changeset.cs_id, device=changeset.device or self.device,
                                actor=changeset.actor, ducky=changeset.ducky, message=changeset.message,
-                               group=changeset.group, part=changeset.part, last=changeset.last)
+                               group=changeset.group, part=changeset.part, last=changeset.last,
+                               author=changeset.author, author_pc=changeset.author_pc)
             for unit in changeset.release_locks:
                 lk = sp.locks.get((plugin, unit))
                 if lk and (lk.user, lk.device) == (self.user, self.device):
@@ -435,6 +442,7 @@ class FakeLedger:
                     seq=seq, items=tuple(self._incoming(v) for v in cs.items), cs_id=cs.cs_id,
                     by=self.server.names.get(cs.by, cs.by), device=cs.device, at=cs.at, actor=cs.actor,
                     ducky=cs.ducky, message=cs.message, group=cs.group, part=cs.part, last=cs.last,
+                    author=cs.author, author_pc=cs.author_pc,
                 ))
             return PullPage(changesets=tuple(out), head=repo.head, more=len(seqs) > limit)
 
@@ -474,7 +482,8 @@ class FakeLedger:
                     cs = repo.changesets[s_]
                     entries.append(HistoryEntry(seq=s_, by=names.get(cs.by, cs.by), at=cs.at, device=cs.device,
                                                 actor=cs.actor, ducky=cs.ducky, message=cs.message,
-                                                count=len(cs.items), items=tuple((v.kind, v.key) for v in cs.items)))
+                                                count=len(cs.items), items=tuple((v.kind, v.key) for v in cs.items),
+                                                author=cs.author, author_pc=cs.author_pc))
                 return History(tuple(entries), more=len(seqs) > limit)
             versions = sorted((v for v in repo.versions.get(tuple(key), []) if before is None or v.seq < before),
                               key=lambda v: v.seq, reverse=True)
@@ -977,6 +986,21 @@ def check_device_identity(world: World) -> None:
     _expect([(lk.unit, lk.device, lk.mine) for lk in roster.locks] == [(unit, device, True)], f"locks {roster.locks}")
 
 
+def check_author(world: World) -> None:
+    """A live group's leader sends a groupmate's change under their name: pull and history
+    give back who made it and on which PC; the leader's own change names nobody else."""
+    a, b = world.client("ana", "d1", name="Ana"), world.client("ben", "d2", name="Ben")
+    _commit(a, put_item("doc", "card.pip", b"1"), author="Ben", author_pc="BEN-PC")
+    _commit(a, put_item("doc", "card.zed", b"2"))
+    page = b.pull(SPACE, PLUGIN, 0, 10)
+    _expect(isinstance(page, PullPage), f"pull {page!r}")
+    _expect([(c.by, c.author, c.author_pc) for c in page.changesets] == [("Ana", "Ben", "BEN-PC"), ("Ana", "", "")],
+            f"pulled {page.changesets!r}")
+    h = b.history(SPACE, PLUGIN)
+    _expect([(e.by, e.author, e.author_pc) for e in h.entries] == [("Ana", "", ""), ("Ana", "Ben", "BEN-PC")],
+            f"history {h!r}")
+
+
 def _tree_names(backend: Any, folder: str, unit: str, relpath: str) -> tuple[str, str]:
     """A folder file's item key and its unit's id, as the backend names them (core's
     fallback for a backend that doesn't)."""
@@ -1067,5 +1091,6 @@ CHECKS: list[Callable[[World], None]] = [
     check_beat,
     check_revert_keys_as_of,
     check_device_identity,
+    check_author,
     check_tree_files,
 ]
