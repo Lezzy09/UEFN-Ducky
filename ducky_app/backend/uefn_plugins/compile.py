@@ -432,6 +432,12 @@ def _run_nuitka(kpy: Path, work: Path, mod_name: str) -> tuple[Path, list[str]]:
         "--no-progressbar",
     ]
     env = dict(os.environ, CFLAGS=BASELINE_CPU_FLAGS, LDFLAGS=BASELINE_CPU_FLAGS)
+    # zig's shared cache (%LOCALAPPDATA%\zig) kept entries whose files were gone, and every
+    # zig cc that hit one failed with "failed to link with LLD: FileNotFound" (Forge 1.2.10).
+    # Each build gets its own cache, deleted with the work dir.
+    zig_cache = work / "zig-cache"
+    env["ZIG_GLOBAL_CACHE_DIR"] = str(zig_cache / "global")
+    env["ZIG_LOCAL_CACHE_DIR"] = str(zig_cache / "local")
     res = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True, env=env, creationflags=_NO_WINDOW)
     warnings = [
         line.strip()
