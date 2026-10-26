@@ -349,6 +349,18 @@ def test_plain_folder_prefers_uefn_when_both_run(tmp_path: Path, monkeypatch) ->
     assert only_unreal["epic_mcp_url"] == "http://127.0.0.1:8001/mcp"
 
 
+def test_row_set_by_hand_to_unreal_port_still_means_uefn(monkeypatch) -> None:
+    import backend.mcp_plugins.store as store
+
+    for row, want in (
+        ("http://127.0.0.1:8001/mcp", EPIC_MCP_DEFAULT_URL),
+        ("http://127.0.0.1:8123/mcp", "http://127.0.0.1:8123/mcp"),
+    ):
+        monkeypatch.setattr(store, "load_plugin_manifest", lambda _id: {"id": EPIC_MCP_SERVER_ID})
+        monkeypatch.setattr(store, "resolve_server_block", lambda _m, row=row: {"type": "http", "url": row})
+        assert epic.epic_mcp_url() == want
+
+
 def test_pool_moves_unreal_editor_to_its_port() -> None:
     import json
 

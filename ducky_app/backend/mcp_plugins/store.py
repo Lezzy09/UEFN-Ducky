@@ -957,7 +957,14 @@ def update_mcp_server_manifest(server_id: str, manifest: dict[str, Any]) -> Path
     else:
         block.pop("disabled", None)
     servers[pid] = block
-    return save_mcp_config(cfg)
+    path = save_mcp_config(cfg)
+    # A pooled connection keeps the manifest it opened with: drop it so the next call uses the new URL.
+    from backend.mcp_plugins.client_pool import get_plugin_pool
+    from backend.mcp_plugins.epic import invalidate_epic_mcp_probe
+
+    get_plugin_pool().forget(pid)
+    invalidate_epic_mcp_probe()
+    return path
 
 
 # --------------------------------------------------------------------------- connection editor

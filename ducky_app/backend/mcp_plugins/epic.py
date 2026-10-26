@@ -96,7 +96,11 @@ _owner_cache: dict[int, dict[str, Any]] = {}
 
 
 def epic_mcp_url() -> str:
-    """Live URL from the nested MCP row, else the catalog default."""
+    """UEFN's URL: the nested MCP row, else the catalog default.
+
+    A row pointed at Unreal Editor's port (people set it by hand before Ducky knew
+    both ports) still means UEFN's default port: the probe finds Unreal Editor itself.
+    """
     try:
         from backend.mcp_plugins.store import load_plugin_manifest, resolve_server_block
 
@@ -105,6 +109,8 @@ def epic_mcp_url() -> str:
             block = resolve_server_block(manifest)
             url = str(block.get("url") or "").strip()
             if url:
+                if _host_port(url)[1] == UNREAL_EDITOR_MCP_PORT:
+                    return with_port(url, _host_port(EPIC_MCP_DEFAULT_URL)[1])
                 return url
     except Exception:
         pass
