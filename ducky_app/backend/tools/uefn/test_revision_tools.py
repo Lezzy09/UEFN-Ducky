@@ -42,7 +42,7 @@ def test_push_checks_in_the_pending_files_then_confirms(root) -> None:
         "revision_check_in",
         {"files": ["C:/Islands/MyIsland/Content/A.uasset"], "description": "moved the cube"},
     )
-    assert lore.calls == [("pending_paths", root), ("repo_state", root)]
+    assert lore.calls == [("repo_state", root), ("pending_paths", root), ("repo_state", root)]
     assert out == {"ok": True, "checked_in": 2, "saved": 1, "in_sync": True, "behind": 0, "ahead": 0, "error": ""}
 
 
@@ -136,3 +136,13 @@ def test_push_does_not_retry_when_nothing_was_saved(root) -> None:
         out = json.loads(level_viewport.revision_push("d"))
     assert send.call_count == 1 and sleep.call_count == 0
     assert out["ok"] is False and out["error"] == "remote said no"
+
+
+def test_push_refuses_while_the_island_is_behind(root) -> None:
+    lore = fake_lore(states=[{"ok": True, "in_sync": False, "behind": True, "ahead": False}])
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        out = json.loads(level_viewport.revision_push("moved the cube"))
+    assert out["ok"] is False and out["behind"] is True and "revision_pull" in out["error"]
+    assert lore.calls == [("repo_state", root)]
+    send.assert_not_called()

@@ -86,6 +86,17 @@ def revision_push(description: str, pretty: bool = False) -> str:
     if not root:
         return tool_json({"ok": False, "error": "UEFN has no island open"}, pretty=pretty)
     lore = _lore_cli()
+    # Lore refuses a check-in (with no message) while main has revisions this island lacks.
+    before = lore.repo_state(root)
+    if before.get("ok") and before.get("behind"):
+        return tool_json(
+            {
+                "ok": False,
+                **_remote_state(before),
+                "error": "the remote has changes this island doesn't have: pull them first (revision_pull), then push",
+            },
+            pretty=pretty,
+        )
     pending = lore.pending_paths(root)
     if not pending.get("ok"):
         return tool_json({"ok": False, "error": pending.get("error") or "could not list pending files"}, pretty=pretty)
