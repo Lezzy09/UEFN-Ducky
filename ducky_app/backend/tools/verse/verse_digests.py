@@ -427,15 +427,20 @@ def search_verse_digest(
         # scan below, but only visits matching lines instead of every line of
         # every digest (the Fortnite digest alone is tens of thousands of lines).
         try:
-            hits = _rows().digest_search(q, [d.path for d in digests], limit=20000)
-            candidate_lines = {}
+            rows = _rows()
+            # Only digests whose index matches the file on disk: a failed re-index
+            # (busy DB) would otherwise hide every line UEFN added since.
+            fresh = [d.path for d in digests if rows.digest_indexed_mtime(d.path) == d.mtime]
+            hits = rows.digest_search(q, fresh, limit=20000)
+            candidate_lines = {p: set() for p in fresh}
             for path, lineno, _text in hits:
-                candidate_lines.setdefault(path, set()).add(lineno)
+                candidate_lines[path].add(lineno)
         except Exception:  # noqa: BLE001
             candidate_lines = None
     for d in digests:
-        wanted = candidate_lines.get(d.path) if candidate_lines is not None else None
-        if candidate_lines is not None and not wanted:
+        indexed = candidate_lines is not None and d.path in candidate_lines
+        wanted = candidate_lines[d.path] if indexed else None
+        if indexed and not wanted:
             continue
         # Running enclosing module as we scan (decls are in file order).
         module_cursor = ""

@@ -167,3 +167,25 @@ def test_a_bare_digest_name_finds_that_project_digest(tmp_path: Path, monkeypatc
     assert vd.discover_digest_files(digest_path="Fortnite.digest.verse", extra_roots=roots) == [str(path)]
     assert vd.discover_digest_files(digest_path="Missing.digest.verse", extra_roots=roots) == []
     assert vd.digests_available(digest_path="fortnite.digest.verse", extra_roots=roots)
+
+
+def test_search_ignores_an_index_older_than_the_digest(tmp_path: Path, monkeypatch):
+    # Oct 26 2026: a re-index that failed (busy DB) left the trigram index on the old
+    # digest, and search_verse_digest hid everything UEFN added since.
+    class StaleRows:
+        def digest_indexed_mtime(self, _path):
+            return 1.0  # never the file's mtime
+
+        def digest_index(self, *_a):
+            raise RuntimeError("database is locked")
+
+        def digest_search(self, _q, paths, limit=0):
+            assert paths == []
+            return []
+
+    vd.clear_cache()
+    monkeypatch.setattr(vd, "_use_db", lambda: True)
+    monkeypatch.setattr(vd, "_rows", lambda: StaleRows())
+    path = _write_digest(tmp_path)
+    out = vd.search_verse_digest("trigger_device", digest_path=str(path))
+    assert out["count"] >= 1 and out["matches"][0]["rank"] == 0
