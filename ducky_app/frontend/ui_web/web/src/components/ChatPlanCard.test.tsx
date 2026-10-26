@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatPlan, PlanProgress } from "../types/panel";
 const api = vi.hoisted(() => ({
@@ -35,10 +35,13 @@ it("a member's card links to its lead and the full plan; a lead's card does not"
     ...plan,
     assigned_from: { chat_id: "lead", node_id: "section", plan_title: "Master", assignee: "builder" },
   };
-  const { rerender } = render(
+  const { rerender, container } = render(
     <ChatPlanCard plan={member} progress={progress} allDone={false} onOpenPlan={noop} onStopTracking={noop} onOpenFile={noop} />,
   );
-  expect(await screen.findByText("Lead: Swarm Speed Developer")).toBeTruthy();
+  // The links live inside the panel that slides up, not above the bar.
+  expect(screen.queryByRole("navigation", { name: "Lead plan" })).toBeNull();
+  fireEvent.click(container.querySelector(".chat-plan-popup-bar-main")!);
+  expect(await screen.findByRole("button", { name: "Lead: Swarm Speed Developer" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Full plan" })).toBeTruthy();
 
   rerender(<ChatPlanCard plan={plan} progress={progress} allDone={false} onOpenPlan={noop} onStopTracking={noop} onOpenFile={noop} />);

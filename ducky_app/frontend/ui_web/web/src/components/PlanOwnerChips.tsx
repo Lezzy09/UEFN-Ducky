@@ -278,12 +278,24 @@ export function PlanLeadLinks({ assignedFrom }: { assignedFrom: NonNullable<Chat
     }).catch(() => undefined);
     return () => { alive = false; };
   }, [leadId, nodeId]);
+  // A lead chat is often titled "Lead: …": never show "Lead: Lead: …".
+  const name = leadName.replace(/^lead:\s*/i, "") || leadName;
   return <nav className="plan-pane-nest-crumb plan-lead-links" aria-label="Lead plan">
-    <button type="button" className="plan-pane-btn plan-pane-btn--ghost" onClick={() => requestOpenChatTab(leadId, leadName)}
-      title="Open the lead's chat">Lead: {leadName}</button>
-    <span className="plan-pane-nest-crumb-sep" aria-hidden>·</span>
-    <button type="button" className="plan-pane-btn plan-pane-btn--accent" onClick={() => openLeadPlan(leadId, title, nodeId)}
-      title="This chat's part of a team plan. Open the whole plan to edit it.">Full plan</button>
+    <button type="button" className="plan-pane-btn plan-pane-btn--ghost plan-lead-link" onClick={() => requestOpenChatTab(leadId, leadName)}
+      aria-label={`Lead: ${name}`} title="Open the lead's chat">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+      <span className="plan-lead-link-kicker">Lead</span><span className="plan-lead-link-name">{name}</span>
+    </button>
+    <button type="button" className="plan-pane-btn plan-pane-btn--accent plan-lead-link" onClick={() => openLeadPlan(leadId, title, nodeId)}
+      title="This chat's part of a team plan. Open the whole plan to edit it.">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <rect x="3" y="3" width="6" height="6" rx="1" /><rect x="15" y="3" width="6" height="6" rx="1" /><rect x="9" y="15" width="6" height="6" rx="1" />
+        <path d="M6 9v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9M12 13v2" />
+      </svg>
+      Full plan
+    </button>
     {sections.map(node => <span key={node.id}>
       <span className="plan-pane-nest-crumb-sep" aria-hidden>›</span>
       <button type="button" className="plan-pane-nest-crumb-link" onClick={() => openLeadPlan(leadId, title, node.id)}>{node.content}</button>

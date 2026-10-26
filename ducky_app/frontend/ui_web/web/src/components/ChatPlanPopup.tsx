@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { ChatPlan, PlanProgress } from "../types/panel";
 import type { OpenFileHandler } from "../types/richContent";
 import { progressForPlan } from "../utils/planOutlineNav";
@@ -12,6 +12,8 @@ interface ChatPlanPopupProps {
   onOpenPlan?: () => void;
   onStopTracking?: () => void | Promise<void>;
   onOpenFile?: OpenFileHandler;
+  /** Shown at the top of the opened panel, above the steps (a member's Lead / Full plan links). */
+  header?: ReactNode;
   /** Lets the sticky query wrapper raise its z-index without a :has() selector. */
   onOpenChange?: (open: boolean) => void;
 }
@@ -28,6 +30,7 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
   onOpenPlan,
   onStopTracking,
   onOpenFile,
+  header,
   onOpenChange,
 }: ChatPlanPopupProps) {
   const [open, setOpen] = useState(false);
@@ -154,6 +157,7 @@ export const ChatPlanPopup = memo(function ChatPlanPopup({
         <div className="chat-plan-popup-reveal">
           <div className="chat-plan-popup-clip">
             <div className="chat-plan-popup-panel">
+              {header}
               <PlanTodoCard plan={plan} progress={progress} embedded />
               {plan.body_markdown ? (
                 <div className="chat-plan-popup-md">

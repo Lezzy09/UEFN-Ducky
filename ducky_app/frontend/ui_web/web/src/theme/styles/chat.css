@@ -7374,6 +7374,44 @@
   color: var(--fg);
 }
 
+.plan-lead-links {
+  gap: 6px;
+}
+
+.plan-lead-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.plan-lead-link svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.plan-lead-link-kicker {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.plan-lead-link-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Inside the opened plan: the crumb heads the panel, set off from the steps. */
+.chat-plan-popup-panel > .plan-lead-links {
+  margin: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
 .plan-pane-nest-children {
   margin-top: 10px;
   display: flex;
