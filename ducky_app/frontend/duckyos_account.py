@@ -839,7 +839,7 @@ _CAP_DEFAULTS: dict[str, bool] = {
     "allow_see_other_programs": True,
 }
 _UEFN_SEE_TOOLS = frozenset({"take_high_res_screenshot", "get_viewport_camera"})
-_OTHER_APP_PREFIXES = ("blender_", "unity_", "roblox_")
+_OTHER_APP_PREFIXES = ("blender_", "unity_", "roblox_", "godot_")
 _OTHER_APP_TOOLS = frozenset({"snip_screen"})
 
 

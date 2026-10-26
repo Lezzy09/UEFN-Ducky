@@ -29,6 +29,7 @@ const FLAVOR_NAMES: Record<ProjectFlavor, string> = {
   roblox: "Roblox project",
   unreal: "Unreal project",
   unity: "Unity project",
+  godot: "Godot project",
   folder: "Folder project",
 };
 
@@ -36,7 +37,7 @@ export function projectFlavorName(flavor: ProjectFlavor | "" | undefined): strin
   return FLAVOR_NAMES[flavor || "folder"];
 }
 
-/** A project's icon: Verse for an island, the engine's mark for Roblox / Unreal / Unity,
+/** A project's icon: Verse for an island, the engine's mark for Roblox / Unreal / Unity / Godot,
  * else a folder. */
 export function ProjectFlavorIcon({ flavor }: { flavor: ProjectFlavor | "" | undefined }) {
   switch (flavor) {
@@ -48,6 +49,8 @@ export function ProjectFlavorIcon({ flavor }: { flavor: ProjectFlavor | "" | und
       return <Icons.Unreal />;
     case "unity":
       return <Icons.Box />;
+    case "godot":
+      return <Icons.Godot />;
     default:
       return <Icons.Folder />;
   }

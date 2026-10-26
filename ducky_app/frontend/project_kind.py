@@ -331,12 +331,13 @@ def forget_cached_kind(root: Path | str | None = None) -> None:
 # --------------------------------------------------------------------------- flavor
 #
 # What a project is, for its icon only (the Content pane, the project list): a UEFN
-# island, or a folder that is a Roblox, Unreal or Unity project, or just a folder. It
+# island, or a folder that is a Roblox, Unreal, Unity or Godot project, or just a folder. It
 # never changes what Ducky does with the project; that is the kind's job.
 
 ROBLOX = "roblox"
 UNREAL = "unreal"
 UNITY = "unity"
+GODOT = "godot"
 # Rojo's project file and the Roblox toolchain managers' manifests.
 _ROBLOX_MARKERS = ("default.project.json", "wally.toml", "aftman.toml", "rokit.toml", "foreman.toml")
 
@@ -353,13 +354,15 @@ def _compute_flavor(root: Path) -> str:
             return UNREAL
         if (root / "Assets").is_dir() and (root / "ProjectSettings").is_dir():
             return UNITY
+        if (root / "project.godot").is_file():
+            return GODOT
     except OSError:
         pass
     return FOLDER
 
 
 def project_flavor(root: Path | str) -> str:
-    """``uefn``, ``roblox``, ``unreal``, ``unity`` or ``folder`` for a project root; empty without one."""
+    """``uefn``, ``roblox``, ``unreal``, ``unity``, ``godot`` or ``folder`` for a project root; empty without one."""
     raw = str(root or "").strip()
     if not raw:
         return ""

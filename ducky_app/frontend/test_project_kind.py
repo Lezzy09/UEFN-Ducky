@@ -446,3 +446,8 @@ def test_flavor_names_what_a_project_is_for_its_icon(tmp_path: Path) -> None:
     (unity / "Assets").mkdir(parents=True)
     (unity / "ProjectSettings").mkdir()
     assert pk.project_flavor(unity) == pk.UNITY
+
+    godot = tmp_path / "GodotGame"
+    godot.mkdir()
+    (godot / "project.godot").write_text("config_version=5\n", encoding="utf-8")
+    assert pk.project_flavor(godot) == pk.GODOT

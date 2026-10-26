@@ -1136,9 +1136,9 @@ export interface PluginConnectionRow {
 /** "uefn": an island (<Name>.uefnproject). "folder": any other folder, e.g. a code repo. */
 export type ProjectKind = "uefn" | "folder";
 
-/** What a project is, for its icon only: an island, or a folder that is a Roblox, Unreal or
- * Unity project, or just a folder. */
-export type ProjectFlavor = "uefn" | "roblox" | "unreal" | "unity" | "folder";
+/** What a project is, for its icon only: an island, or a folder that is a Roblox, Unreal,
+ * Unity or Godot project, or just a folder. */
+export type ProjectFlavor = "uefn" | "roblox" | "unreal" | "unity" | "godot" | "folder";
 
 export interface ProjectInfo {
   path: string;
