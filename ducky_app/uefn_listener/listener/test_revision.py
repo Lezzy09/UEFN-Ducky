@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
@@ -216,3 +217,53 @@ def test_sync_stops_when_the_map_cannot_be_closed(mod) -> None:
     out = mod.cmd_revision_sync()
     assert out["ok"] is False and "close the map" in out["error"]
     assert mod._state["synced"] == []
+
+
+class FakeActor:
+    def __init__(self, package, label):
+        self.package, self.label = package, label
+
+    def get_package(self):
+        return FakePackage(self.package)
+
+    def get_actor_label(self):
+        return self.label
+
+
+def test_targets_name_each_actor_asset_and_folder_file(mod, monkeypatch, tmp_path) -> None:
+    content = tmp_path / "Content"
+    actor_file = content / "__ExternalActors__" / "MyMap" / "1" / "8X" / "ABC.uasset"
+    actor_file.parent.mkdir(parents=True)
+    actor_file.write_bytes(b"")
+    (content / "MyMap.umap").write_bytes(b"")
+    (content / "Materials").mkdir()
+    (content / "Materials" / "M_Red.uasset").write_bytes(b"")
+    actors = {
+        "Cube": FakeActor("/MyIsland/__ExternalActors__/MyMap/1/8X/ABC", "VerifyCube"),
+        "OldStyle": FakeActor("/MyIsland/MyMap", "OldStyle"),  # not World Partition: lives in the map
+        "Unsaved": FakeActor("/MyIsland/__ExternalActors__/MyMap/2/AA/NEW", "Unsaved"),  # no file yet
+    }
+    lookup = type(sys)("listener.lookup")
+    lookup.find_actor = actors.get
+    monkeypatch.setitem(sys.modules, "listener.lookup", lookup)
+    monkeypatch.setattr(sys.modules["listener"], "lookup", lookup, raising=False)
+
+    out = mod.cmd_revision_targets(paths=[
+        "Cube", "OldStyle", "Unsaved", "/MyIsland/Materials/M_Red.M_Red", "/MyIsland/Materials",
+        "/Fortnite/Some/Asset", "/MyIsland/MyMap.MyMap:PersistentLevel.Gone", "",
+    ])["targets"]
+
+    def norm(p):
+        return os.path.abspath(p).replace("\\", "/")
+
+    assert out == {
+        "Cube": {"file": norm(actor_file), "label": "VerifyCube"},
+        "OldStyle": {"file": norm(content / "MyMap.umap"), "label": "OldStyle"},
+        "/MyIsland/Materials/M_Red.M_Red": {"file": norm(content / "Materials" / "M_Red.uasset"), "label": "M_Red"},
+        "/MyIsland/Materials": {"file": norm(content / "Materials"), "label": "Materials"},
+    }
+
+
+def test_targets_without_an_island_name_nothing(mod) -> None:
+    mod._state["island"] = ""
+    assert mod.cmd_revision_targets(paths=["Cube"]) == {"targets": {}}

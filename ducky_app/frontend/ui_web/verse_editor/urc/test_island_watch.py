@@ -16,6 +16,9 @@ class FakeLore:
         self.local = {"ok": True, "revision": 13, "signature": "s13", "error": ""}
         self.state: dict = {}
         self.calls: list[str] = []
+        self.lock_rows: list[dict] = []
+        self.locks_ok = True
+        self.lock_calls = 0
 
     def remote_head(self, root):
         self.calls.append("remote_head")
@@ -28,6 +31,14 @@ class FakeLore:
     def repo_state(self, root):
         self.calls.append("repo_state")
         return dict(self.state)
+
+    def locks(self, root):
+        self.lock_calls += 1
+        if not self.locks_ok:
+            return {"ok": False, "locks": [], "me": "", "error": "lore lock timed out after 60s"}
+        rows = [{**lk, "path": f"{Path(root).as_posix()}/{lk['rel']}", "owner_raw": lk["owner"]}
+                for lk in self.lock_rows]
+        return {"ok": True, "locks": rows, "me": "Nacht", "error": ""}
 
 
 def behind_15(own: bool = False) -> dict:
@@ -48,7 +59,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     island = tmp_path / "test_ducky_v2"
     (island / ".lore").mkdir(parents=True)
     lore = FakeLore()
-    out = SimpleNamespace(island=str(island), lore=lore, alerts=[], pushes=[], doc={}, away=False)
+    out = SimpleNamespace(island=str(island), lore=lore, alerts=[], pushes=[], doc={}, locks_doc={}, away=False)
     out.open = str(island)
     monkeypatch.setattr(iw, "_lore", lambda: lore)
     monkeypatch.setattr(iw, "_open_island", lambda: out.open)
@@ -61,6 +72,12 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         out.doc = dict(doc) if doc else {}
 
     monkeypatch.setattr(iw, "_write_doc", write)
+    monkeypatch.setattr(iw, "_read_locks", lambda: dict(out.locks_doc) if out.locks_doc else None)
+
+    def write_locks(doc):
+        out.locks_doc = dict(doc) if doc else {}
+
+    monkeypatch.setattr(iw, "_write_locks", write_locks)
     iw.reset_for_tests()
     yield out
     iw.reset_for_tests()
@@ -184,3 +201,80 @@ def test_news_text() -> None:
     news = [{"creator": "A", "message": "m2"}, {"creator": "B", "message": "m1"}, {"creator": "A", "message": ""}]
     assert iw.news_text("isle", news) == "3 new changes on isle from A, B: “m2”"
     assert iw.news_text("isle", [{"creator": "", "message": ""}]) == "1 new change on isle"
+
+
+LOCKED = "Content/__ExternalActors__/test_ducky_v2/1/8X/2FWY3VPOAEBYKZPCJNGYE6.uasset"
+OTHER = {"rel": LOCKED, "owner": "Mich ou", "mine": False}
+MINE = {"rel": "Content/Mine.uasset", "owner": "Nacht", "mine": True}
+
+
+def test_locks_every_round_without_alerts(env) -> None:
+    env.lore.state = IN_SYNC_15
+    env.lore.lock_rows = [OTHER, MINE]
+    iw.tick()
+    iw.tick()  # nothing moved: still one lock query a round
+    assert env.lore.lock_calls == 2 and env.alerts == [] and env.pushes == []
+    doc = env.locks_doc
+    assert doc["island"] == env.island and doc["me"] == "Nacht" and doc["others"] == [LOCKED]
+    assert doc["every_s"] == iw.ACTIVE_S and "owner_raw" not in doc["locks"][0]
+    want = {iw.norm_path(f"{env.island}/{LOCKED}"): "Mich ou"}
+    assert iw.others_locks(env.island) == want
+    # Any spelling of the island folder works
+    assert iw.others_locks(env.island.replace("\\", "/").upper() if iw.os.name == "nt" else env.island) == want
+
+
+def test_others_locks_empty_when_stale_or_other_island(env, tmp_path: Path) -> None:
+    env.lore.state = IN_SYNC_15
+    env.lore.lock_rows = [OTHER]
+    iw.tick()
+    assert iw.others_locks(str(tmp_path / "another_island")) == {}
+    assert iw.others_locks("") == {}
+    env.locks_doc["checked_at"] -= int(iw.LOCKS_STALE_ROUNDS * iw.ACTIVE_S + iw.LOCKS_SLACK_S + 5)
+    assert iw.others_locks(env.island) == {}
+    assert iw.locks_for_agents() is None
+    # Away from the PC, rounds are a minute apart: the same age is still fresh
+    env.locks_doc["every_s"] = iw.IDLE_S
+    assert iw.others_locks(env.island) != {}
+
+
+def test_lock_failure_keeps_the_last_list_until_stale(env) -> None:
+    env.lore.state = IN_SYNC_15
+    env.lore.lock_rows = [OTHER]
+    iw.tick()
+    env.lore.locks_ok = False
+    iw.tick()
+    assert env.locks_doc["others"] == [LOCKED]
+
+
+def test_no_lock_query_when_lore_fails(env) -> None:
+    env.lore.remote = {"ok": False, "error": "offline"}
+    iw.tick()
+    assert env.lore.lock_calls == 0 and env.locks_doc == {}
+
+
+def test_island_closed_forgets_its_locks(env) -> None:
+    env.lore.state = IN_SYNC_15
+    env.lore.lock_rows = [OTHER]
+    iw.tick()
+    env.open = ""
+    iw.tick()
+    assert env.locks_doc == {} and iw.others_locks(env.island) == {}
+
+
+def test_locks_for_agents(env) -> None:
+    env.lore.state = IN_SYNC_15
+    env.lore.lock_rows = [MINE]
+    iw.tick()
+    assert iw.locks_for_agents() is None  # only this PC's own locks: nothing to say
+    env.lore.lock_rows = [OTHER, MINE]
+    iw.tick()
+    out = iw.locks_for_agents()
+    assert out["count"] == 1 and out["locked_by_others"] == [{"file": LOCKED, "by": "Mich ou"}]
+    assert out["island"] == env.island and "don't modify" in out["hint"]
+
+
+def test_norm_path(tmp_path: Path) -> None:
+    messy = str(tmp_path / "Isle" / "Content" / ".." / "Content" / "A.uasset")
+    p = iw.norm_path(messy)
+    assert "\\" not in p and ".." not in p and p == iw.norm_path(p)
+    assert p.endswith("/content/a.uasset" if iw.os.name == "nt" else "/Content/A.uasset")

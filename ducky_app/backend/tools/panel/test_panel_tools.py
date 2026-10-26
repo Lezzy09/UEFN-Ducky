@@ -122,3 +122,16 @@ def test_get_status_shows_island_updates(isolated_appdata, monkeypatch):
     assert json.loads(ducky_panel.ducky_get_status())["island_updates"] == news
     monkeypatch.setattr(island_watch, "for_agents", lambda: None)
     assert "island_updates" not in json.loads(ducky_panel.ducky_get_status())
+
+
+def test_get_status_shows_island_locks(isolated_appdata, monkeypatch):
+    from backend.tools.panel import ducky_panel
+    from frontend.ui_web.verse_editor.urc import island_watch
+
+    monkeypatch.setattr(ducky_panel, "fetch_listener_status", lambda *a, **k: {"online": True})
+    monkeypatch.setattr(island_watch, "for_agents", lambda: None)
+    locks = {"island": "C:/Islands/isle", "count": 1, "locked_by_others": [{"file": "Content/A.uasset", "by": "Mich ou"}]}
+    monkeypatch.setattr(island_watch, "locks_for_agents", lambda: locks)
+    assert json.loads(ducky_panel.ducky_get_status())["island_locks"] == locks
+    monkeypatch.setattr(island_watch, "locks_for_agents", lambda: None)
+    assert "island_locks" not in json.loads(ducky_panel.ducky_get_status())

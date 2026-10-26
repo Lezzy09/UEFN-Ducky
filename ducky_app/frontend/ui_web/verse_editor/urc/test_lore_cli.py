@@ -336,3 +336,77 @@ def test_remote_and_local_head_one_call_each(island: Path, monkeypatch: pytest.M
 def test_heads_need_a_lore_folder(tmp_path: Path) -> None:
     assert lore_cli.remote_head(str(tmp_path))["ok"] is False
     assert lore_cli.local_head(str(tmp_path))["ok"] is False
+
+
+# Captured live on test_ducky_v2 (Oct 26): the laptop's account modified an actor.
+LOCKED = "Content/__ExternalActors__/test_ducky_v2/1/8X/2FWY3VPOAEBYKZPCJNGYE6.uasset"
+LOCK_QUERY = f"Locks found:\n{LOCKED} by Michㅤㅤㅤㅤou on branch e726318bbc3fd75ac8733a7e030cc35b\n"
+LOCK_QUERY_NONE = "Locks found:\n"
+LOCK_STATUS = f"Files locked for edit:\n{LOCKED} by Michㅤㅤㅤㅤou on Mon, 26 Oct 2026 20:43:53 +0000\n"
+AUTH_INFO = "ID: 01978ee6969170d7b3c32f095502d2c8\nName: Nachtㅤ\n"
+LOCK_KEY = ("lock", "query", "--branch", "main")
+
+
+def test_parse_locks_query_and_status() -> None:
+    want = [{"rel": LOCKED, "owner_raw": "Michㅤㅤㅤㅤou"}]
+    assert lore_cli.parse_locks(LOCK_QUERY) == want
+    assert lore_cli.parse_locks(LOCK_STATUS) == want
+    assert lore_cli.parse_locks(LOCK_QUERY_NONE) == []
+    spaced = "Locks found:\nContent/My Folder/A by B.uasset by Nachtㅤ on branch abc\n"
+    assert lore_cli.parse_locks(spaced) == [{"rel": "Content/My Folder/A by B.uasset", "owner_raw": "Nachtㅤ"}]
+
+
+def test_parse_auth_info() -> None:
+    assert lore_cli.parse_auth_info(AUTH_INFO) == {"id": "01978ee6969170d7b3c32f095502d2c8", "name": "Nachtㅤ"}
+    assert lore_cli.parse_auth_info("") == {"id": "", "name": ""}
+
+
+@pytest.fixture
+def no_me_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lore_cli, "_me_cache", {})
+
+
+def test_locks_other_pc_and_mine(island: Path, monkeypatch: pytest.MonkeyPatch, no_me_cache) -> None:
+    mine = f"{LOCK_QUERY}Content/Mine.uasset by Nachtㅤ on branch e726318bbc3fd75ac8733a7e030cc35b\n"
+    fake = FakeLore({LOCK_KEY: mine, ("auth", "info"): AUTH_INFO})
+    monkeypatch.setattr(lore_cli, "_run_lore", fake)
+    out = lore_cli.locks(str(island))
+    assert out["ok"] and out["me"] == "Nacht" and out["error"] == ""
+    assert out["locks"] == [
+        {"path": f"{island.as_posix()}/{LOCKED}", "rel": LOCKED, "owner": "Mich ou", "owner_raw": "Michㅤㅤㅤㅤou",
+         "mine": False},
+        {"path": f"{island.as_posix()}/Content/Mine.uasset", "rel": "Content/Mine.uasset", "owner": "Nacht",
+         "owner_raw": "Nachtㅤ", "mine": True},
+    ]
+    # auth info is cached: the next round is one lore call
+    fake.calls.clear()
+    assert lore_cli.locks(str(island))["ok"]
+    assert fake.calls == [list(LOCK_KEY)]
+
+
+def test_locks_none(island: Path, monkeypatch: pytest.MonkeyPatch, no_me_cache) -> None:
+    monkeypatch.setattr(lore_cli, "_run_lore", FakeLore({LOCK_KEY: LOCK_QUERY_NONE, ("auth", "info"): AUTH_INFO}))
+    assert lore_cli.locks(str(island)) == {"ok": True, "locks": [], "me": "Nacht", "error": ""}
+
+
+def test_locks_unknown_me_is_not_ok(island: Path, monkeypatch: pytest.MonkeyPatch, no_me_cache) -> None:
+    monkeypatch.setattr(lore_cli, "_run_lore", FakeLore({LOCK_KEY: LOCK_QUERY}))  # auth info fails
+    out = lore_cli.locks(str(island))
+    assert out["ok"] is False and "auth info" in out["error"]
+    assert [lk["mine"] for lk in out["locks"]] == [False]
+    assert lore_cli._me_cache == {}  # a failure isn't cached
+
+
+def test_locks_errors_never_raise(tmp_path: Path, island: Path, monkeypatch: pytest.MonkeyPatch, no_me_cache) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert lore_cli.locks(str(plain)) == {"ok": False, "locks": [], "me": "",
+                                          "error": "not a Lore repository (no .lore folder)"}
+    monkeypatch.setattr(lore_cli, "_run_lore", lambda *a: (False, "lore lock timed out after 60s"))
+    assert lore_cli.locks(str(island))["error"] == "lore lock timed out after 60s"
+
+    def boom(*a):
+        raise RuntimeError("bad")
+
+    monkeypatch.setattr(lore_cli, "_run_lore", boom)
+    assert lore_cli.locks(str(island))["ok"] is False

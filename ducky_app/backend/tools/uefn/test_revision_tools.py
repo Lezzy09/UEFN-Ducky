@@ -26,6 +26,18 @@ def fake_lore(*, paths=None, states=None):
     return SimpleNamespace(repo_state=repo_state, pending_paths=pending_paths, calls=calls)
 
 
+@pytest.fixture(autouse=True)
+def others_locks():
+    """Files the other PC holds, by normalised path (none unless a test adds some)."""
+    from backend.bridge import island_locks
+
+    held: dict[str, str] = {}
+    watch = SimpleNamespace(others_locks=lambda island: dict(held),
+                            norm_path=lambda p: p.replace("\\", "/").lower())
+    with patch.object(island_locks, "_watch", return_value=watch):
+        yield held
+
+
 @pytest.fixture
 def root():
     with patch.object(level_viewport, "_island_root", return_value="C:/Islands/MyIsland"):
@@ -44,6 +56,17 @@ def test_push_checks_in_the_pending_files_then_confirms(root) -> None:
     )
     assert lore.calls == [("repo_state", root), ("pending_paths", root), ("repo_state", root)]
     assert out == {"ok": True, "checked_in": 2, "saved": 1, "in_sync": True, "behind": 0, "ahead": 0, "error": ""}
+
+
+def test_push_names_a_pending_file_the_other_pc_holds_and_checks_nothing_in(root, others_locks) -> None:
+    lore = fake_lore(paths=["C:/Islands/MyIsland/Content/A.uasset", "C:/Islands/MyIsland/Content/B.uasset"])
+    others_locks["c:/islands/myisland/content/b.uasset"] = "Mich ou"
+    with patch.object(level_viewport, "_lore_cli", return_value=lore),             patch.object(level_viewport, "send_command") as send:
+        out = json.loads(level_viewport.revision_push("moved the cube"))
+    send.assert_not_called()
+    assert out["ok"] is False
+    assert out["locked_by_other"] == [{"file": "C:/Islands/MyIsland/Content/B.uasset", "owner": "Mich ou"}]
+    assert out["error"].startswith("B.uasset is being edited on the other PC by Mich ou")
 
 
 def test_push_refuses_an_empty_description(root) -> None:

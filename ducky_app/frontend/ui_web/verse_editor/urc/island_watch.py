@@ -19,6 +19,13 @@ It never pulls: a pull swaps the map, so only the person, or a Ducky they ask
 What it found is kept in ``workspace_state`` (:data:`KEY`) for every process:
 ``ducky_get_status`` shows it to agents (:func:`for_agents`).
 
+Each round that reached lore also reads the island's file locks (``lore lock query``, ~1 s):
+UEFN locks a file on the server as soon as an actor is modified, until check-in or revert, so
+a lock held by the other PC's account means "they're editing it, don't touch". The latest list
+goes to ``workspace_state`` (:data:`LOCKS_KEY`); :func:`others_locks` reads it from any process
+(the MCP bridge's guard), :func:`locks_for_agents` is what ``ducky_get_status`` shows. Locks
+never alert.
+
 Rounds: every :data:`ACTIVE_S` while the person uses this PC, :data:`IDLE_S` once they've
 been away :data:`notifications.AWAY_S`; a failing lore call backs off to :data:`ERROR_MAX_S`.
 """
@@ -40,6 +47,9 @@ NO_ISLAND_S = 15.0  # no listener / no island open: only the local health GET
 NOT_LORE_S = 120.0  # the open island has no .lore folder
 ERROR_MAX_S = 300.0
 KEY = "island_updates"  # workspace_state doc
+LOCKS_KEY = "island_locks"  # workspace_state doc: the open island's file locks
+LOCKS_STALE_ROUNDS = 3  # a locks doc older than this many rounds (+ slack) means nothing
+LOCKS_SLACK_S = 15.0  # lore calls take ~1 s each; leaves room for a slow round
 
 _lock = threading.Lock()
 _wake = threading.Event()
@@ -101,26 +111,48 @@ def _push(event: dict[str, Any]) -> None:
         _log.debug("island_updates push failed", exc_info=True)
 
 
-def _read_doc() -> dict[str, Any] | None:
+def _kv_get(key: str) -> dict[str, Any] | None:
     try:
         from backend.store.repos import kv
 
-        doc = kv.get_doc("workspace_state", KEY)
+        doc = kv.get_doc("workspace_state", key)
         return doc if isinstance(doc, dict) else None
     except Exception:  # noqa: BLE001
         return None
 
 
-def _write_doc(doc: dict[str, Any] | None) -> None:
+def _kv_set(key: str, doc: dict[str, Any] | None) -> None:
     try:
         from backend.store.repos import kv
 
         if doc is None:
-            kv.delete_doc("workspace_state", KEY)
+            kv.delete_doc("workspace_state", key)
         else:
-            kv.set_doc("workspace_state", KEY, doc)
+            kv.set_doc("workspace_state", key, doc)
     except Exception:  # noqa: BLE001 — agents just don't see it this round
-        _log.debug("island_updates doc write failed", exc_info=True)
+        _log.debug("%s doc write failed", key, exc_info=True)
+
+
+def _read_doc() -> dict[str, Any] | None:
+    return _kv_get(KEY)
+
+
+def _write_doc(doc: dict[str, Any] | None) -> None:
+    _kv_set(KEY, doc)
+
+
+def _read_locks() -> dict[str, Any] | None:
+    return _kv_get(LOCKS_KEY)
+
+
+def _write_locks(doc: dict[str, Any] | None) -> None:
+    _kv_set(LOCKS_KEY, doc)
+
+
+def norm_path(p: str) -> str:
+    """One spelling for a file path on both sides (this watch, the bridge guard):
+    absolute, ``os.path.normcase`` (lower case on Windows), forward slashes."""
+    return os.path.normcase(os.path.abspath(p)).replace("\\", "/")
 
 
 # --------------------------------------------------------------------------- one round
@@ -187,6 +219,27 @@ def _apply(island: str, state: dict[str, Any]) -> None:
     })
 
 
+def _refresh_locks(island: str, lore: Any, every_s: float) -> None:
+    """One ``lore lock query``; the doc is replaced only when it worked (else it goes stale)."""
+    try:
+        res = lore.locks(island)
+    except Exception as exc:  # noqa: BLE001
+        res = {"ok": False, "error": str(exc)}
+    if not res.get("ok"):
+        _log.debug("island watch locks: %s", res.get("error"))
+        return
+    rows = [{k: lk.get(k) for k in ("path", "rel", "owner", "mine")} for lk in res.get("locks") or []]
+    _write_locks({
+        "island": island,
+        "me": str(res.get("me") or ""),
+        "locks": rows,
+        "others": [lk["rel"] for lk in rows if not lk["mine"]],
+        "checked_at": int(time.time()),
+        "every_s": every_s,
+        "pid": os.getpid(),
+    })
+
+
 def tick() -> float:
     """One round. Returns the seconds until the next one. Never raises."""
     try:
@@ -196,6 +249,7 @@ def tick() -> float:
     with _lock:
         if island != _st["island"]:
             _reset(island)
+            _write_locks(None)
             if not island:
                 _write_doc(None)
         if not island:
@@ -203,24 +257,32 @@ def tick() -> float:
         if not (Path(island) / ".lore").is_dir():
             return NOT_LORE_S
         lore = _lore()
-        head = lore.remote_head(island)
-        if not head.get("ok"):
-            return _failed(str(head.get("error") or "remote head"))
-        local_moved = False
-        if _st["behind"]:
-            local = lore.local_head(island)
-            if not local.get("ok"):
-                return _failed(str(local.get("error") or "local head"))
-            local_moved = local["signature"] != _st["local_sig"]
-        if head["signature"] == _st["remote_sig"] and not local_moved:
-            _st["fails"] = 0
-            return _interval()
-        state = lore.repo_state(island)
-        if not state.get("ok"):
-            return _failed(str(state.get("error") or "repo state"))
+        delay = _updates_round(island, lore)
+        if _st["fails"] == 0:  # lore answered this round: the locks too (one more call)
+            _refresh_locks(island, lore, delay)
+        return delay
+
+
+def _updates_round(island: str, lore: Any) -> float:
+    """The remote head (and what's new) part of a round; returns the next delay."""
+    head = lore.remote_head(island)
+    if not head.get("ok"):
+        return _failed(str(head.get("error") or "remote head"))
+    local_moved = False
+    if _st["behind"]:
+        local = lore.local_head(island)
+        if not local.get("ok"):
+            return _failed(str(local.get("error") or "local head"))
+        local_moved = local["signature"] != _st["local_sig"]
+    if head["signature"] == _st["remote_sig"] and not local_moved:
         _st["fails"] = 0
-        _apply(island, state)
         return _interval()
+    state = lore.repo_state(island)
+    if not state.get("ok"):
+        return _failed(str(state.get("error") or "repo state"))
+    _st["fails"] = 0
+    _apply(island, state)
+    return _interval()
 
 
 # --------------------------------------------------------------------------- for agents
@@ -247,6 +309,54 @@ def for_agents() -> dict[str, Any] | None:
         out["hint"] = ("Another PC pushed changes to this island. Tell the person; pull only when they "
                        "agree (revision_pull never pulls over unsaved work).")
     return out
+
+
+def _fresh_locks(island: str = "") -> dict[str, Any] | None:
+    """The locks doc when it is recent (and for ``island`` when given), else None."""
+    doc = _read_locks()
+    if not doc or not doc.get("island"):
+        return None
+    if island and norm_path(str(doc["island"])) != norm_path(island):
+        return None
+    every = float(doc.get("every_s") or ACTIVE_S)
+    age = time.time() - float(doc.get("checked_at") or 0)
+    if not -LOCKS_SLACK_S <= age <= LOCKS_STALE_ROUNDS * every + LOCKS_SLACK_S:
+        return None
+    return doc
+
+
+def others_locks(island: str) -> dict[str, str]:
+    """``{norm_path(file): owner display name}``: files of ``island`` locked by another PC's
+    account, from the latest round (any process). ``{}`` when the doc is stale (the watch
+    stopped, lore failed for a few rounds), for another island, or nothing is locked.
+    Never raises."""
+    try:
+        doc = _fresh_locks(island) if island else None
+        if doc is None:
+            return {}
+        return {norm_path(str(lk["path"])): str(lk.get("owner") or "")
+                for lk in doc.get("locks") or [] if lk.get("path") and not lk.get("mine")}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def locks_for_agents(limit: int = 20) -> dict[str, Any] | None:
+    """What ``ducky_get_status`` shows: the open island's files locked by another PC (compact),
+    or None when there are none or the list is stale."""
+    try:
+        doc = _fresh_locks()
+    except Exception:  # noqa: BLE001
+        return None
+    others = [lk for lk in (doc or {}).get("locks") or [] if not lk.get("mine")]
+    if not others:
+        return None
+    return {
+        "island": doc["island"],
+        "count": len(others),
+        "locked_by_others": [{"file": lk.get("rel"), "by": lk.get("owner")} for lk in others[:limit]],
+        "hint": ("Another PC is editing these files (Unreal Revision Control locks): don't modify "
+                 "them until it checks in; tell the person."),
+    }
 
 
 # --------------------------------------------------------------------------- the thread

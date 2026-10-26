@@ -114,3 +114,58 @@ def cmd_revision_sync(force: bool = False, reload: bool = True) -> dict:
         "seconds": round(time.time() - started, 2),
         "error": error,
     }
+
+
+def _package_file(package: str, mount: str, content: str) -> str:
+    """``/<mount>/A/B`` (object or subobject suffix allowed) → its ``.uasset``/``.umap`` under
+    ``Content``, or the folder when it names one. Empty for another mount or nothing on disk."""
+    name = package.split(":", 1)[0].split(".", 1)[0].rstrip("/")
+    if not mount or not name.lower().startswith(mount.lower()):
+        return ""
+    base = os.path.join(content, *name[len(mount):].split("/"))
+    for candidate in (base + ".uasset", base + ".umap", base):
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate).replace("\\", "/")
+    return ""
+
+
+def _actor_entry(actor, mount: str, content: str) -> Optional[dict]:
+    try:
+        # A World Partition actor is its own package (__ExternalActors__); any other one
+        # lives in the map's package, so the map is what a lock would hold.
+        path = _package_file(str(actor.get_package().get_name()), mount, content)
+        label = str(actor.get_actor_label() or "")
+    except Exception:
+        return None
+    return {"file": path, "label": label} if path else None
+
+
+@register("revision_targets")
+def cmd_revision_targets(paths: Optional[List[str]] = None) -> dict:
+    """Which island file each actor (path or label), asset or folder path lives in.
+
+    For the host's lock guard: ``{targets: {ident: {file, label}}}``, unknown idents left
+    out. One lookup index (the tick's) and a few stats; never walks the disk.
+    """
+    island = island_directory()
+    mount = content_root()
+    content = os.path.join(island, "Content") if island else ""
+    out: dict = {}
+    if not content or not mount:
+        return {"targets": out}
+    from listener import lookup
+
+    for ident in paths or []:
+        ident = str(ident or "").strip()
+        if not ident or ident in out:
+            continue
+        actor = lookup.find_actor(ident)
+        entry = _actor_entry(actor, mount, content) if actor is not None else None
+        # A missing actor's path (Map.Map:PersistentLevel.X) would name the map: leave it out.
+        if entry is None and ident.startswith("/") and ":" not in ident:
+            path = _package_file(ident, mount, content)
+            if path:
+                entry = {"file": path, "label": ident.split(".", 1)[0].rstrip("/").rsplit("/", 1)[-1]}
+        if entry is not None:
+            out[ident] = entry
+    return {"targets": out}

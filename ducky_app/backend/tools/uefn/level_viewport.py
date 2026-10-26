@@ -100,6 +100,22 @@ def revision_push(description: str, pretty: bool = False) -> str:
     pending = lore.pending_paths(root)
     if not pending.get("ok"):
         return tool_json({"ok": False, "error": pending.get("error") or "could not list pending files"}, pretty=pretty)
+    # A file changed here while the other PC holds its lock (edited by hand past UEFN's
+    # warning, or by a script) can't be checked in: say which, instead of a failed check-in.
+    from backend.bridge.island_locks import locked_files
+
+    locked = locked_files(root, pending.get("paths") or [])
+    if locked:
+        first = locked[0]
+        return tool_json(
+            {
+                "ok": False,
+                "locked_by_other": locked,
+                "error": f"{first['file'].rsplit('/', 1)[-1]} is being edited on the other PC by "
+                f"{first['owner'] or 'someone else'}: wait until they push it, pull, then push again",
+            },
+            pretty=pretty,
+        )
     result = send_command(
         "revision_check_in",
         {"files": list(pending.get("paths") or []), "description": description},

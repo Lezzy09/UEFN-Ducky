@@ -1,4 +1,4 @@
-"""Read-only island sync state via UEFN's ``lore.exe`` CLI (status, history, revision diff).
+"""Read-only island sync state via UEFN's ``lore.exe`` CLI (status, history, revision diff, locks).
 
 Never syncs, pushes, commits or stages. Text output only (lore 0.8.6 has no JSON flag).
 Lore prints paths relative to the CWD, so every command runs with cwd = the island root.
@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,13 @@ _ENTRY_RE = re.compile(r"^([A-Z]) (.+)$")
 _FIELD_RE = re.compile(r"^(Revision|Signature|Merge|Creator)\s*:\s*(.+)$")
 # Epic display names pad with invisible fillers (Hangul filler U+3164 and kin): "Michㅤㅤou".
 _FILLERS = re.compile("[ᅟᅠㅤﾠ​-‍⠀]+")
+# ``lore lock query``: "<rel> by <name> on branch <id>"; ``lore lock status``: "... on <date>".
+_LOCK_RE = re.compile(r"^(.+) by (.+?) on (?:branch \S+|\w{3}, .+)$")
+# ``lore auth info``: "ID: <hex>" / "Name: <display name>".
+_AUTH_RE = re.compile(r"^(ID|Name):\s*(.*)$")
+_ME_TTL_S = 600.0  # the signed-in account rarely changes: one ``auth info`` per 10 min
+_me_cache: dict[str, tuple[float, dict[str, str]]] = {}
+_me_lock = threading.Lock()
 # Per-user editor collections, never shared between PCs.
 _EXCLUDED_PREFIX = "content/developers/"
 
@@ -114,6 +123,28 @@ def parse_history(text: str) -> list[dict[str, Any]]:
 def display_name(name: str) -> str:
     """An Epic display name without its invisible padding: "Michㅤㅤou" → "Mich ou"."""
     return " ".join(_FILLERS.sub(" ", name or "").split())
+
+
+def parse_locks(text: str) -> list[dict[str, str]]:
+    """``lore lock query`` / ``lore lock status`` → ``[{rel, owner_raw}]`` (``owner_raw`` as lore
+    prints it, invisible padding included). Header lines ("Locks found:", "Files locked for
+    edit:") and anything else are skipped."""
+    out: list[dict[str, str]] = []
+    for raw in text.splitlines():
+        m = _LOCK_RE.match(raw.strip())
+        if m:
+            out.append({"rel": _norm(m.group(1)), "owner_raw": m.group(2).strip()})
+    return out
+
+
+def parse_auth_info(text: str) -> dict[str, str]:
+    """``lore auth info`` → ``{id, name}`` (``name`` raw, padding included; "" when missing)."""
+    out = {"id": "", "name": ""}
+    for raw in text.splitlines():
+        m = _AUTH_RE.match(raw.strip())
+        if m:
+            out["id" if m.group(1) == "ID" else "name"] = m.group(2).strip()
+    return out
 
 
 def _reachable(history: list[dict[str, Any]]) -> set[str]:
@@ -338,3 +369,61 @@ def pending_paths(project_root: str, *, timeout: float = 60.0) -> dict:
     except (OSError, ValueError) as exc:
         return _failed(f"listing pending files failed: {exc}", paths=[])
     return {"ok": True, "paths": paths, "error": ""}
+
+
+def whoami(project_root: str, *, timeout: float = 30.0) -> dict[str, str]:
+    """{id, name}: the Epic account lore is signed in with on this PC (``lore auth info``, local,
+    ~0.3 s), cached :data:`_ME_TTL_S`. Empty strings when lore can't say. Never raises."""
+    now = time.monotonic()
+    with _me_lock:
+        hit = _me_cache.get(project_root)
+        if hit and now - hit[0] < _ME_TTL_S:
+            return dict(hit[1])
+    ok, out = _run_lore(project_root, ["auth", "info"], timeout)
+    me = parse_auth_info(out) if ok else {"id": "", "name": ""}
+    if me["name"]:
+        with _me_lock:
+            _me_cache[project_root] = (now, me)
+    return dict(me)
+
+
+def _same_owner(owner_raw: str, me_raw: str) -> bool:
+    if not me_raw:
+        return False
+    return owner_raw.strip() == me_raw.strip() or display_name(owner_raw) == display_name(me_raw)
+
+
+def locks(project_root: str, *, timeout: float = 60.0) -> dict:
+    """{ok, locks:[{path, rel, owner, owner_raw, mine}], me, error}: the files locked on remote
+    ``main`` (UEFN locks a file as soon as an actor is modified, until check-in or revert), one
+    ``lore lock query --branch main`` (~1.1 s) plus a cached ``lore auth info``.
+
+    ``path`` is absolute with forward slashes, ``owner`` the display name without padding.
+    ``mine``: the lock owner is the account lore is signed in with here (:func:`whoami`,
+    compared by display name: lore prints no owner id). When that account is unknown, ok=False
+    (locks still listed, all ``mine=False``) so nobody mistakes this PC's own locks for another's.
+    Never raises."""
+    try:
+        if not (Path(project_root) / ".lore").is_dir():
+            return _failed("not a Lore repository (no .lore folder)", locks=[], me="")
+        ok, out = _run_lore(project_root, ["lock", "query", "--branch", REMOTE_BRANCH], timeout)
+        if not ok:
+            return _failed(out, locks=[], me="")
+        me_raw = whoami(project_root, timeout=min(timeout, 30.0))["name"]
+        root = Path(project_root)
+        rows = [
+            {
+                "path": (root / lk["rel"]).as_posix(),
+                "rel": lk["rel"],
+                "owner": display_name(lk["owner_raw"]),
+                "owner_raw": lk["owner_raw"],
+                "mine": _same_owner(lk["owner_raw"], me_raw),
+            }
+            for lk in parse_locks(out)
+        ]
+        me = display_name(me_raw)
+        if not me:
+            return _failed("lore auth info names no signed-in account", locks=rows, me="")
+        return {"ok": True, "locks": rows, "me": me, "error": ""}
+    except Exception as exc:  # noqa: BLE001 — never raises
+        return _failed(f"lock query failed: {exc}", locks=[], me="")
