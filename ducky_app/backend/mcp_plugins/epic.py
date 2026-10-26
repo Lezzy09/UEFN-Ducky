@@ -7,7 +7,8 @@ from the listener once Python is on; user just enables the project in the panel.
 UEFN and Unreal Editor 5.8+ ship the same plugin (server ``unreal-mcp``, same
 default port), so the process that owns the port decides which editor Ducky is
 talking to: island work never goes to Unreal Editor, and Unreal project work
-never goes to UEFN.
+never goes to UEFN. Unreal Editor belongs on its own port (8001): Ducky looks for
+it there, and moves it there itself when it finds it on UEFN's port.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from urllib.parse import urlparse
 EPIC_MCP_SERVER_ID = "unreal-mcp"
 EPIC_MCP_DEFAULT_URL = "http://127.0.0.1:8000/mcp"
 EPIC_MCP_PREFIX = "unreal"
+# ponytail: fixed port, a setting when someone needs 8001 for something else.
+UNREAL_EDITOR_MCP_PORT = 8001
 
 EDITOR_UEFN = "uefn"
 EDITOR_UNREAL = "unreal"
@@ -47,12 +50,15 @@ EPIC_MCP_SETUP_STEPS: tuple[str, ...] = (
 UNREAL_MCP_SETUP_STEPS: tuple[str, ...] = (
     'In Unreal Editor 5.8 or newer: Edit → Plugins → enable "Unreal MCP" and "All Toolsets", '
     "then restart the editor.",
-    "Editor Preferences → General → Model Context Protocol → turn on Auto Start Server "
-    "(or type ModelContextProtocol.StartServer in the editor console).",
-    "Keep the default http://127.0.0.1:8000/mcp: Ducky already connects there as unreal-mcp, "
-    "so its agents need no ModelContextProtocol.GenerateClientConfig files.",
-    "UEFN uses the same port. To keep both editors open, set Unreal Editor's Server Port Number "
-    "to 8001 and Settings → MCPs → unreal-mcp URL to http://127.0.0.1:8001/mcp while you work in Unreal.",
+    "Type ModelContextProtocol.StartServer in the editor console. Ducky finds the server on "
+    f"port 8000 or {UNREAL_EDITOR_MCP_PORT}; no client config files are needed.",
+    f"Once connected, Ducky moves Unreal Editor's MCP to port {UNREAL_EDITOR_MCP_PORT} and turns on "
+    "Auto Start Server, so after one restart it starts by itself and never blocks UEFN on 8000.",
+)
+
+UNREAL_MOVED_NOTE = (
+    f"Unreal Editor is on UEFN's port 8000. Ducky set it to {UNREAL_EDITOR_MCP_PORT}: "
+    "restart Unreal Editor once and both editors can run together."
 )
 
 # Ducky MCP tools that duplicate Epic's four toolsets — stop registering these.
@@ -85,7 +91,8 @@ EPIC_PRUNED_DUCKY_TOOLS: frozenset[str] = frozenset(
 )
 
 _probe_cache: dict[str, Any] = {"at": 0.0, "root": "", "result": None}
-_owner_cache: dict[str, Any] = {"at": 0.0, "port": 0, "name": "", "pid": 0, "started": 0.0}
+# port -> {at, name, pid, started}
+_owner_cache: dict[int, dict[str, Any]] = {}
 
 
 def epic_mcp_url() -> str:
@@ -119,6 +126,11 @@ def _host_port(url: str) -> tuple[str, int]:
     if parsed.port:
         return host, parsed.port
     return host, 443 if (parsed.scheme or "").lower() == "https" else 80
+
+
+def with_port(url: str, port: int) -> str:
+    parsed = urlparse(url)
+    return parsed._replace(netloc=f"{parsed.hostname or '127.0.0.1'}:{port}").geturl()
 
 
 def tcp_probe_url(url: str, *, timeout: float = _PROBE_TIMEOUT_SEC) -> bool:
@@ -172,14 +184,15 @@ def _port_owner(port: int) -> str:
     # One editor can close and another take the port between two probes, so a cached
     # owner only counts while that same process is still running.
     now = time.time()
+    hit = _owner_cache.get(port) or {}
     if (
-        _owner_cache.get("port") == port
-        and now - float(_owner_cache.get("at") or 0) < _OWNER_CACHE_SEC
-        and _same_process(int(_owner_cache.get("pid") or 0), float(_owner_cache.get("started") or 0))
+        hit
+        and now - float(hit.get("at") or 0) < _OWNER_CACHE_SEC
+        and _same_process(int(hit.get("pid") or 0), float(hit.get("started") or 0))
     ):
-        return str(_owner_cache.get("name") or "")
+        return str(hit.get("name") or "")
     name, pid, started = _listening_process(port)
-    _owner_cache.update(at=now, port=port, name=name, pid=pid, started=started)
+    _owner_cache[port] = {"at": now, "name": name, "pid": pid, "started": started}
     return name
 
 
@@ -223,14 +236,12 @@ def _blocked_steps(reason: str, *, expected: str, editor: str, port: int, proces
     if expected == EDITOR_UNREAL:
         return [
             f"Port {port} is held by UEFN, not Unreal Editor, so Ducky sends no Unreal project work there.",
-            f"Close UEFN, or set Unreal Editor's Server Port Number to {port + 1} (Editor Preferences → "
-            f"General → Model Context Protocol) and Settings → MCPs → unreal-mcp URL to "
-            f"http://127.0.0.1:{port + 1}/mcp.",
+            f"Start Unreal Editor's MCP (ModelContextProtocol.StartServer in its console); Ducky looks "
+            f"for it on port {UNREAL_EDITOR_MCP_PORT}.",
         ]
     return [
         f"Port {port} is held by {editor_label(editor)}, not UEFN, so Ducky sends no island work there.",
-        f"Close Unreal Editor, or set its Server Port Number to {port + 1} (Editor Preferences → "
-        "General → Model Context Protocol).",
+        UNREAL_MOVED_NOTE,
         "Then type ModelContextProtocol.StartServer in UEFN's console, or reopen the island, "
         "so UEFN's MCP takes the port.",
     ]
@@ -252,25 +263,42 @@ def probe_epic_mcp(*, ttl_sec: float = _PROBE_CACHE_SEC, project_root: str | Non
 
     root = _panel_project_root() if project_root is None else project_root.strip()
     expected = expected_editor(root)
-    url = epic_mcp_url()
-    host, port = _host_port(url)
-    editor = ""
-    process = ""
-    if not epic_mcp_enabled():
-        reason = "disabled"
-    elif not tcp_probe_url(url):
-        reason = "unreachable"
-        _owner_cache["at"] = 0.0
+    uefn_url = epic_mcp_url()
+    unreal_url = with_port(uefn_url, UNREAL_EDITOR_MCP_PORT)
+    # Islands only ever look at UEFN's port; Unreal projects try Unreal's port first.
+    if expected == EDITOR_UEFN:
+        candidates = [uefn_url]
+    elif expected == EDITOR_UNREAL:
+        candidates = [unreal_url, uefn_url]
     else:
+        candidates = [uefn_url, unreal_url]
+    # (url, reason, editor, process) of the first port that answered but does not fit.
+    blocked: tuple[str, str, str, str] | None = None
+    picked: tuple[str, str, str] | None = None
+    if epic_mcp_enabled():
+        for url in candidates:
+            host, port = _host_port(url)
+            if not tcp_probe_url(url):
+                _owner_cache.pop(port, None)
+                continue
+            process = _port_owner(port) if host.lower() in _LOOPBACK_HOSTS else ""
+            found = editor_of_process(process)
+            if found == "other":
+                blocked = blocked or (url, "port_taken", "", process)
+            elif found and expected and found != expected:
+                blocked = blocked or (url, "other_editor", found, process)
+            else:
+                picked = (url, found, process)
+                break
+    if picked:
+        url, editor, process = picked
         reason = ""
-        process = _port_owner(port) if host.lower() in _LOOPBACK_HOSTS else ""
-        found = editor_of_process(process)
-        if found == "other":
-            reason = "port_taken"
-        elif found:
-            editor = found
-            if expected and editor != expected:
-                reason = "other_editor"
+    elif blocked:
+        url, reason, editor, process = blocked
+    else:
+        url, editor, process = candidates[0], "", ""
+        reason = "unreachable" if epic_mcp_enabled() else "disabled"
+    port = _host_port(url)[1]
     if not reason:
         steps: list[str] = []
     elif reason in ("disabled", "unreachable"):
@@ -283,6 +311,8 @@ def probe_epic_mcp(*, ttl_sec: float = _PROBE_CACHE_SEC, project_root: str | Non
         "epic_mcp_url": url,
         "epic_mcp_editor": editor,
         "epic_mcp_setup_steps": steps,
+        # Unreal Editor on another port than its own: the pool moves it, the person restarts it once.
+        "epic_mcp_note": UNREAL_MOVED_NOTE if editor == EDITOR_UNREAL and port != UNREAL_EDITOR_MCP_PORT else "",
     }
     _probe_cache["at"] = now
     _probe_cache["root"] = root
@@ -293,7 +323,7 @@ def probe_epic_mcp(*, ttl_sec: float = _PROBE_CACHE_SEC, project_root: str | Non
 def invalidate_epic_mcp_probe() -> None:
     _probe_cache["at"] = 0.0
     _probe_cache["result"] = None
-    _owner_cache["at"] = 0.0
+    _owner_cache.clear()
 
 
 _EDITOR_INI = (

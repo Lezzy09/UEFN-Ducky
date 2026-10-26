@@ -224,7 +224,9 @@ def get_system_prompt_parts(
         epic_line = (
             f"- Epic Unreal MCP: online in Unreal Editor ({epic.get('epic_mcp_url')}): full Unreal "
             "Engine, not UEFN. No Verse, Fortnite devices or islands there; find its tools with "
-            "`unreal__list_toolsets`.\n"
+            "`unreal__list_toolsets`."
+            + (f" Tell the user once: {epic['epic_mcp_note']}" if epic.get("epic_mcp_note") else "")
+            + "\n"
         )
     elif epic.get("epic_mcp_online"):
         epic_line = f"- Epic UEFN MCP: online ({epic.get('epic_mcp_url')})\n"

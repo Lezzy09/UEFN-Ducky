@@ -79,6 +79,10 @@ describe("ConnectionStatusDropdown", () => {
       ["UEFN MCP", "Offline · port held by Unreal Editor", false, false],
       ["Unreal MCP", `Connected · ${url}`, true, false],
     ]);
+    // Unreal Editor on UEFN's port: connected, with the note that Ducky moved it.
+    expect(rows({ epic_mcp_online: true, epic_mcp_editor: "unreal", epic_mcp_note: "restart once" })[1]).toEqual(
+      ["Unreal MCP", "Connected · restart once", true, true],
+    );
     // An island is open but Unreal Editor holds the port: Ducky sends it nothing.
     expect(rows({ epic_mcp_reason: "other_editor", epic_mcp_editor: "unreal" })).toEqual([
       ["UEFN MCP", "Offline · port held by Unreal Editor", false, true],

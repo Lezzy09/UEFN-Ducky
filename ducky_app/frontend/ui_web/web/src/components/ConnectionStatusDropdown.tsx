@@ -42,9 +42,9 @@ export function epicMcpRows(status: ListenerStatus): [RowProps, RowProps] {
     if (reason === "disabled") return { label, detail: "Disabled in Settings → MCPs", ok: false };
     if (reason === "port_taken") return { label, detail: "Port taken by another program", ok: false, warn: true };
     if (mine) {
-      return wrongProject
-        ? { label, detail: "Running · not used for this project", ok: false, warn: true }
-        : { label, detail: `Connected · ${url}`, ok: true };
+      if (wrongProject) return { label, detail: "Running · not used for this project", ok: false, warn: true };
+      if (status.epic_mcp_note) return { label, detail: `Connected · ${status.epic_mcp_note}`, ok: true, warn: true };
+      return { label, detail: `Connected · ${url}`, ok: true };
     }
     if (editor) return { label, detail: `Offline · port held by ${otherEditor}`, ok: false, warn: wrongProject };
     return { label, detail: offline, ok: false };

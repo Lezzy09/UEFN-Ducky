@@ -398,6 +398,7 @@ def fetch_listener_status(
         "epic_mcp_url": str(epic.get("epic_mcp_url") or ""),
         "epic_mcp_editor": epic_editor,
         "epic_mcp_setup_steps": list(epic.get("epic_mcp_setup_steps") or []),
+        "epic_mcp_note": str(epic.get("epic_mcp_note") or ""),
         "uefn_python_editor_scripting": bool(beta.get("python_editor_scripting")),
         "uefn_mcp_toolsets": bool(beta.get("uefn_mcp_toolsets")),
         "python_and_toolsets": coexistence,

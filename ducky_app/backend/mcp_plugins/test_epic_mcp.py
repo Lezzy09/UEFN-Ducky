@@ -294,6 +294,77 @@ def test_call_tool_refuses_the_wrong_editor_without_connecting(monkeypatch) -> N
         assert "held by Unreal Editor" in str(exc)
 
 
+def _probe_ports(monkeypatch, *, owners: dict[int, str], root: str) -> tuple[dict, list[int]]:
+    """owners: port -> listening process; any other port is closed."""
+    probed: list[int] = []
+    monkeypatch.setattr(epic, "epic_mcp_url", lambda: EPIC_MCP_DEFAULT_URL)
+    monkeypatch.setattr(epic, "epic_mcp_enabled", lambda: True)
+
+    def _tcp(url, **_k):
+        port = epic._host_port(url)[1]
+        probed.append(port)
+        return port in owners
+
+    monkeypatch.setattr(epic, "tcp_probe_url", _tcp)
+    monkeypatch.setattr(epic, "_listening_process", lambda port: (owners.get(port, ""), port, 1.0))
+    epic.invalidate_epic_mcp_probe()
+    return epic.probe_epic_mcp(project_root=root, ttl_sec=0), probed
+
+
+def test_unreal_project_finds_unreal_editor_on_its_own_port(tmp_path: Path, monkeypatch) -> None:
+    _island, game, _repo = _projects(tmp_path)
+    owners = {8000: "UnrealEditorFortnite-Win64-Shipping.exe", 8001: "UnrealEditor.exe"}
+    result, _ = _probe_ports(monkeypatch, owners=owners, root=game)
+    assert result["epic_mcp_online"] is True
+    assert result["epic_mcp_url"] == "http://127.0.0.1:8001/mcp"
+    assert result["epic_mcp_note"] == ""
+
+
+def test_unreal_editor_on_uefn_port_gets_the_move_note(tmp_path: Path, monkeypatch) -> None:
+    _island, game, repo = _projects(tmp_path)
+    for root in (game, repo):
+        result, _ = _probe_ports(monkeypatch, owners={8000: "UnrealEditor.exe"}, root=root)
+        assert result["epic_mcp_online"] is True
+        assert result["epic_mcp_url"] == EPIC_MCP_DEFAULT_URL
+        assert "8001" in result["epic_mcp_note"]
+
+
+def test_island_only_looks_at_uefn_port(tmp_path: Path, monkeypatch) -> None:
+    island, _game, _repo = _projects(tmp_path)
+    result, probed = _probe_ports(monkeypatch, owners={8001: "UnrealEditor.exe"}, root=island)
+    assert result["epic_mcp_reason"] == "unreachable"
+    assert probed == [8000]
+    blocked, _ = _probe_ports(monkeypatch, owners={8000: "UnrealEditor.exe"}, root=island)
+    assert blocked["epic_mcp_reason"] == "other_editor"
+    assert epic.UNREAL_MOVED_NOTE in blocked["epic_mcp_setup_steps"]
+
+
+def test_plain_folder_prefers_uefn_when_both_run(tmp_path: Path, monkeypatch) -> None:
+    _island, _game, repo = _projects(tmp_path)
+    owners = {8000: "UnrealEditorFortnite-Win64-Shipping.exe", 8001: "UnrealEditor.exe"}
+    result, _ = _probe_ports(monkeypatch, owners=owners, root=repo)
+    assert result["epic_mcp_editor"] == epic.EDITOR_UEFN
+    only_unreal, _ = _probe_ports(monkeypatch, owners={8001: "UnrealEditor.exe"}, root=repo)
+    assert only_unreal["epic_mcp_editor"] == epic.EDITOR_UNREAL
+    assert only_unreal["epic_mcp_url"] == "http://127.0.0.1:8001/mcp"
+
+
+def test_pool_moves_unreal_editor_to_its_port() -> None:
+    import json
+
+    sent: list[tuple[str, dict]] = []
+
+    class Session:
+        async def call_tool(self, name, args):
+            sent.append((name, args))
+
+    asyncio.run(PluginClientPool()._move_unreal_editor_port(Session()))
+    name, args = sent[0]
+    assert name == "call_tool" and args["tool_name"] == "SetSectionProperties"
+    assert args["arguments"]["sectionName"] == "ModelContextProtocolSettings"
+    assert json.loads(args["arguments"]["propertiesJson"]) == {"serverPortNumber": 8001, "bAutoStartServer": True}
+
+
 def test_ensure_editor_auto_start_appends_and_flips(tmp_path: Path) -> None:
     ini = tmp_path / "Editor.ini"
     ini.write_text("[/Script/Foo]\nBar=1\n", encoding="utf-8")

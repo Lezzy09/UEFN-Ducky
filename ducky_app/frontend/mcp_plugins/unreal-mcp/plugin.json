@@ -32,6 +32,6 @@
     "In Settings → MCPs confirm \"UEFN MCP (Epic)\" is Enabled (slug unreal-mcp).",
     "Do not enable another HTTP/SSE MCP on the same host:port — Ducky blocks that and will disable duplicates.",
     "If port 8000 is taken, set Editor Preferences → Model Context Protocol port, then Settings → MCPs unreal-mcp URL to match.",
-    "Unreal Editor 5.8+: enable the Unreal MCP and All Toolsets plugins, turn on Editor Preferences → Model Context Protocol → Auto Start Server, and open the project folder (the one with the .uproject) in Ducky."
+    "Unreal Editor 5.8+: enable the Unreal MCP and All Toolsets plugins, run ModelContextProtocol.StartServer once, and open the project folder (the one with the .uproject) in Ducky. Ducky moves Unreal Editor to port 8001 with Auto Start on, so after one restart it never blocks UEFN."
   ]
 }

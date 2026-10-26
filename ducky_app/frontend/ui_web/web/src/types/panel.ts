@@ -1106,6 +1106,8 @@ export interface ListenerStatus {
   /** Editor holding Epic's MCP port: "uefn", "unreal" (Unreal Editor 5.8+), or "" unknown. */
   epic_mcp_editor?: string;
   epic_mcp_setup_steps?: string[];
+  /** Set when Unreal Editor sits on UEFN's port: Ducky moved it to 8001, restart Unreal once. */
+  epic_mcp_note?: string;
   uefn_python_editor_scripting?: boolean;
   uefn_mcp_toolsets?: boolean;
   python_and_toolsets?: boolean;

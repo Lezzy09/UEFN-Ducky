@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import logging
 import sys
 import threading
@@ -85,6 +86,7 @@ class PluginConnection:
     session: OwnedSession | None = None
     last_used: float = 0.0
     retired: bool = False
+    url: str = ""
 
 
 class PluginClientPool:
@@ -224,7 +226,15 @@ class PluginClientPool:
         async with conn.lock:
             if self._closing or conn.retired:
                 raise RuntimeError("plugin pool is shutting down")
-            if conn.session is not None and conn.owner is not None and conn.owner.alive:
+            from backend.mcp_plugins.epic import EPIC_MCP_SERVER_ID, probe_epic_mcp
+
+            # Epic's MCP lives on UEFN's port or Unreal Editor's: follow the one the probe picked.
+            epic = await asyncio.to_thread(probe_epic_mcp) if conn.plugin_id == EPIC_MCP_SERVER_ID else {}
+            epic_url = str(epic.get("epic_mcp_url") or "")
+            if (
+                conn.session is not None and conn.owner is not None and conn.owner.alive
+                and (not epic_url or conn.url == epic_url)
+            ):
                 # Not "used" yet: tool listing reuses sessions every 30 s, and only
                 # tool calls (call_tool) may keep a server from going idle.
                 return conn.session
@@ -238,6 +248,8 @@ class PluginClientPool:
             ttype = ""
             try:
                 block = resolve_server_block(conn.manifest)
+                if epic_url:
+                    block = {**block, "url": epic_url}
                 ttype = str(block.get("type") or "")
                 init_timeout = _CONNECT_TIMEOUT_SEC
                 if ttype in ("http", "sse"):
@@ -282,6 +294,9 @@ class PluginClientPool:
                 owner._task.add_done_callback(lambda task: self._owners.discard(owner))
                 await owner.start()
                 conn.session = OwnedSession(owner, list_timeout=_CONNECT_TIMEOUT_SEC, tool_timeout=_TOOL_TIMEOUT_SEC)
+                conn.url = str(block.get("url") or "")
+                if epic.get("epic_mcp_note"):
+                    await self._move_unreal_editor_port(conn.session)
                 conn.last_used = time.time()
                 self._idle_closed.discard(conn.plugin_id)
                 self._clear_http_fail(conn.plugin_id)
@@ -294,6 +309,26 @@ class PluginClientPool:
                 if isinstance(exc, Exception) and ttype in ("http", "sse"):
                     self._mark_http_fail(conn.plugin_id)
                 raise
+
+    async def _move_unreal_editor_port(self, session: OwnedSession) -> None:
+        """Unreal Editor found on UEFN's port: give it its own port and Auto Start for its next launch."""
+        from backend.mcp_plugins.epic import UNREAL_EDITOR_MCP_PORT
+
+        props = {"serverPortNumber": UNREAL_EDITOR_MCP_PORT, "bAutoStartServer": True}
+        try:
+            await session.call_tool("call_tool", {
+                "toolset_name": "ConfigSettingsToolset.ConfigSettingsToolset",
+                "tool_name": "SetSectionProperties",
+                "arguments": {
+                    "containerName": "Editor",
+                    "categoryName": "General",
+                    "sectionName": "ModelContextProtocolSettings",
+                    "propertiesJson": json.dumps(props),
+                },
+            })
+        except Exception as exc:
+            # Without All Toolsets there is no ConfigSettingsToolset; the note still tells the person.
+            log.info("could not move Unreal Editor's MCP port: %s", exc)
 
     async def _close_connection_unlocked(self, conn: PluginConnection) -> None:
         conn.session = None
