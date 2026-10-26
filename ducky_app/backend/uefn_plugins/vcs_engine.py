@@ -375,8 +375,9 @@ def _build(ctx: Ctx, *, message: str = "", now: float) -> int:
     for r in rows:
         if (r["kind"], r["key"]) in busy:
             continue
-        if hold is not None and float(r["updated"]) >= hold and now - float(r["updated"]) < live.HOLD_MAX_S:
-            continue  # the live group's leader sends it for this PC
+        if (hold is not None and float(r["updated"]) >= hold and now - float(r["updated"]) < live.HOLD_MAX_S
+                and live.carried(r["kind"], int(r["size"] or 0), deleted=bool(int(r["deleted"] or 0)))):
+            continue  # the live group's leader sends it for this PC (it can't send one too big to carry)
         theirs = live.relayed(ctx.account, ctx.space, ctx.plugin, r["kind"], r["key"], str(r["sha256"] or ""))
         if theirs is not None:
             batches.setdefault(("", theirs["actor"], theirs["ducky"], theirs["author"], theirs["author_pc"]), []).append(r)

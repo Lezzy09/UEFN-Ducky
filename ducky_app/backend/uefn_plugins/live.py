@@ -1191,6 +1191,17 @@ def _outbox_loop() -> None:
             _log.debug("live states failed", exc_info=True)
 
 
+def carried(kind: str, size: int, *, deleted: bool = False) -> bool:
+    """Whether a change goes to the live group with its content (a delete always does): a
+    doc or file bigger than that only says it changed, so the group's leader can't send it
+    for this PC and the group pulls it once this PC has (:func:`hold_since` never holds it)."""
+    if deleted:
+        return True
+    if kind == "doc":
+        return size <= DATA_INLINE_MAX
+    return kind == "asset" and size <= DATA_INLINE_MAX * 3 // 4
+
+
 def _data_item(account: str, space: str, plugin: str, r: dict[str, Any]) -> dict[str, Any] | None:
     """One written row as a live message: the doc or file itself when it is small enough,
     else just what changed (the group pulls it)."""
@@ -1205,9 +1216,9 @@ def _data_item(account: str, space: str, plugin: str, r: dict[str, Any]) -> dict
     try:
         if r["kind"] == "doc" and r["value"] is not None:
             raw = data_crypto.open_text(r["value"], account)
-            if len(raw.encode("utf-8")) <= DATA_INLINE_MAX:
+            if carried("doc", len(raw.encode("utf-8"))):
                 item["v"] = raw
-        elif r["kind"] == "asset" and int(r["size"] or 0) <= DATA_INLINE_MAX * 3 // 4:
+        elif r["kind"] == "asset" and carried("asset", int(r["size"] or 0)):
             sealed = scopes.asset_file(scopes.shared_scope(account, space), plugin, r["key"]).read_bytes()
             item["b"] = base64.b64encode(data_crypto.open_bytes(sealed, account)).decode("ascii")
     except Exception:  # noqa: BLE001 — sent without its content: the group pulls it
@@ -1237,7 +1248,8 @@ def _in_reach(account: str, space: str, plugin: str, device: str) -> bool:
 def hold_since(account: str, space: str, plugin: str) -> float | None:
     """When this PC joined its live group of ``plugin``, while a groupmate leads it and is in
     reach: what this PC changed since then goes to the leader, which sends it (the version
-    engine holds it back up to :data:`HOLD_MAX_S`). None: this PC sends its own."""
+    engine holds it back up to :data:`HOLD_MAX_S`; never one too big to go live,
+    :func:`carried`). None: this PC sends its own."""
     from backend.uefn_plugins import scopes
 
     st = room_of(plugin, account, space)

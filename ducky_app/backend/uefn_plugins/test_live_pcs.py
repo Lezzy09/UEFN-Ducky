@@ -15,6 +15,7 @@ its host leaves and ends for the last one in it.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
 import json
@@ -189,6 +190,8 @@ def pc_main(address: tuple[str, int], name: str, app: str = "") -> None:
         "leave": lambda: api.plugin_live_leave(PLUGIN),
         "status": lambda: api.plugin_live_status(PLUGIN),
         "put": data.put,
+        "put_file": lambda k, b64: data.put_file(k, base64.b64decode(b64)),
+        "get_file": lambda k: base64.b64encode(data.get_file(k) or b"").decode(),
         "ai_put": ai_put,
         "get": data.get,
         "row": row,
@@ -420,6 +423,13 @@ def test_two_pcs_go_live_together_share_and_sync_through_the_leader(hub: Hub) ->
     until(lambda: (ben("sync"), ben("row", "card.pip")["dirty"] == 0)[1], "the leader's commit to settle Ben's")
     (entry,) = [e for e in ben("history") if ["doc", "card.pip"] in e["items"]]
     assert (entry["by"], entry["via"], entry["device"], entry["actor"]) == ("Ben", "Ana", "Ben-PC", "user")
+    # A file too big to go live: Ana can't send it for Ben, so Ben sends it at once and Ana pulls it.
+    clip = base64.b64encode(b"v" * 64 * 1024).decode()
+    ben("put_file", "art/clip.webm", clip)
+    sent = until(lambda: (ben("sync"), [e for e in ben("history") if ["asset", "art/clip.webm"] in e["items"]])[1],
+                 "Ben to send his file (well within the 90 s a held change waits)")
+    assert (sent[0]["by"], sent[0].get("via")) == ("Ben", None)
+    until(lambda: (ana("sync"), ana("get_file", "art/clip.webm") == clip)[1], "Ana to get Ben's file")
     # Ben's ducky: its change goes through the leader too, and History says it was Ben's AI.
     ben("ai_put", "card.ai", {"hp": 9}, "Verse Generator")
     until(lambda: ana("get", "card.ai") == {"hp": 9}, "Ana to get the ducky's change live")

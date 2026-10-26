@@ -782,6 +782,12 @@ def test_a_groupmate_holds_its_changes_for_the_leader_while_it_is_in_reach(live_
     PluginData(PLUGIN).put("card.zed", {"hp": 2})
     impl.peers = [{**CY, "path": "none"}]
     assert vcs_engine._build(_ctx(account), now=time.time()) == 1  # the leader is out of reach: ours at once
+    impl.peers = [{**CY, "path": "direct"}]
+    PluginData(PLUGIN).put("card.tiny", {"hp": 3})
+    PluginData(PLUGIN).put_file("art/clip.webm", b"x" * live.DATA_INLINE_MAX)  # too big to go live
+    assert vcs_engine._build(_ctx(account), now=time.time()) == 1  # Cy can't send what never reached it: ours
+    going = space_vcs.cs_items_open(account, SPACE, PLUGIN)
+    assert ("asset", "art/clip.webm") in going and ("doc", "card.tiny") not in going  # the small one waits for Cy
 
 
 def test_the_new_leader_gets_what_the_old_one_didnt_send(live_data: dict[str, Any]) -> None:
