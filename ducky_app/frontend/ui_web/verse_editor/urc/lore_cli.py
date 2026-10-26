@@ -28,7 +28,9 @@ _HISTORY_DEPTH = 200
 
 _BRANCH_RE = re.compile(r"^On branch (\S+) revision (\d+) -> ([0-9a-f]+)")
 _ENTRY_RE = re.compile(r"^([A-Z]) (.+)$")
-_FIELD_RE = re.compile(r"^(Revision|Signature|Merge)\s*:\s*(.+)$")
+_FIELD_RE = re.compile(r"^(Revision|Signature|Merge|Creator)\s*:\s*(.+)$")
+# Epic display names pad with invisible fillers (Hangul filler U+3164 and kin): "Michㅤㅤou".
+_FILLERS = re.compile("[ᅟᅠㅤﾠ​-‍⠀]+")
 # Per-user editor collections, never shared between PCs.
 _EXCLUDED_PREFIX = "content/developers/"
 
@@ -82,24 +84,36 @@ def parse_status(text: str) -> dict[str, Any]:
 
 
 def parse_history(text: str) -> list[dict[str, Any]]:
-    """``lore history`` (full format) → ``[{revision, signature, merges}]``, newest first.
+    """``lore history`` (full format) → ``[{revision, signature, merges, creator, message}]``,
+    newest first.
 
     The list follows first parents; ``merges`` holds the other parent(s) a check-in merged in
-    (UEFN merges the personal autosave branch into ``main``).
+    (UEFN merges the personal autosave branch into ``main``). ``creator`` is the Epic display
+    name as lore prints it, ``message`` the first line of the check-in description.
     """
     out: list[dict[str, Any]] = []
     for raw in text.splitlines():
         m = _FIELD_RE.match(raw.strip())
         if not m:
+            if out and raw[:1].isspace() and raw.strip() and not out[-1]["message"]:
+                out[-1]["message"] = raw.strip()
             continue
         key, val = m.group(1), m.group(2).strip()
         if key == "Revision":
-            out.append({"revision": int(val) if val.isdigit() else None, "signature": "", "merges": []})
+            out.append({"revision": int(val) if val.isdigit() else None, "signature": "", "merges": [],
+                        "creator": "", "message": ""})
         elif out and key == "Signature":
             out[-1]["signature"] = val
+        elif out and key == "Creator":
+            out[-1]["creator"] = val
         elif out:
             out[-1]["merges"].extend(val.split())
     return out
+
+
+def display_name(name: str) -> str:
+    """An Epic display name without its invisible padding: "Michㅤㅤou" → "Mich ou"."""
+    return " ".join(_FILLERS.sub(" ", name or "").split())
 
 
 def _reachable(history: list[dict[str, Any]]) -> set[str]:
@@ -119,6 +133,26 @@ def compare_histories(local: list[dict[str, Any]], remote: list[dict[str, Any]])
     behind = bool(remote_head) and remote_head not in _reachable(local)
     ahead = bool(local_head) and base != local_head
     return {"merge_base": base, "behind": behind, "ahead": ahead, "in_sync": not behind and not ahead}
+
+
+def incoming(local: list[dict[str, Any]], remote: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remote main's first-parent revisions the local head lacks, newest first:
+    ``[{revision, signature, creator, message, own}]``. ``own``: the check-in merges a revision
+    the local history already has (this PC's own autosave checked in to main), so it brings
+    nothing made elsewhere."""
+    local_set = _reachable(local)
+    out: list[dict[str, Any]] = []
+    for rev in remote:
+        if rev["signature"] in local_set:
+            break
+        out.append({
+            "revision": rev["revision"],
+            "signature": rev["signature"],
+            "creator": display_name(rev.get("creator", "")),
+            "message": rev.get("message", ""),
+            "own": any(sig in local_set for sig in rev["merges"]),
+        })
+    return out
 
 
 def parse_revision_diff(text: str) -> list[tuple[str, str]]:
@@ -216,7 +250,8 @@ def _state(project_root: str, timeout: float) -> tuple[dict[str, Any] | None, st
     remote = parse_history(remote_out)
     if not remote:
         return None, f"remote branch {REMOTE_BRANCH} has no revisions"
-    cmp = compare_histories(parse_history(local_out), remote)
+    local = parse_history(local_out)
+    cmp = compare_histories(local, remote)
     if not cmp["merge_base"]:
         return None, f"no revision shared with remote {REMOTE_BRANCH} in the last {depth}"
     st.update(
@@ -224,14 +259,43 @@ def _state(project_root: str, timeout: float) -> tuple[dict[str, Any] | None, st
         remote_branch=REMOTE_BRANCH,
         remote_revision=remote[0]["revision"],
         remote_signature=remote[0]["signature"],
+        incoming=incoming(local, remote),
     )
     return st, ""
+
+
+def _head(project_root: str, args: list[str], timeout: float) -> dict:
+    if not (Path(project_root) / ".lore").is_dir():
+        return _failed("not a Lore repository (no .lore folder)")
+    ok, out = _run_lore(project_root, args, timeout)
+    if not ok:
+        return _failed(out)
+    if args == ["status"]:
+        st = parse_status(out)
+        rev, sig = st["local_revision"], st["local_signature"]
+    else:
+        hist = parse_history(out)
+        rev, sig = (hist[0]["revision"], hist[0]["signature"]) if hist else (None, "")
+    if not sig:
+        return _failed("lore shows no revision")
+    return {"ok": True, "revision": rev, "signature": sig, "error": ""}
+
+
+def remote_head(project_root: str, *, timeout: float = 30.0) -> dict:
+    """{ok, revision, signature, error}: the head of remote ``main``, one lore call (~1 s)."""
+    return _head(project_root, ["--remote", "history", "1", "--branch", REMOTE_BRANCH], timeout)
+
+
+def local_head(project_root: str, *, timeout: float = 30.0) -> dict:
+    """{ok, revision, signature, error}: the island's current revision (``lore status``)."""
+    return _head(project_root, ["status"], timeout)
 
 
 def repo_state(project_root: str, *, timeout: float = 60.0) -> dict:
     """{ok, available, repository, branch, local_revision:int|None, remote_revision:int|None,
     behind:bool, ahead:bool, in_sync:bool, staged:[rel paths], untracked:[rel paths], error:str}
-    (+ local_branch, remote_branch="main", local_signature, remote_signature, merge_base).
+    (+ local_branch, remote_branch="main", local_signature, remote_signature, merge_base, and
+    ``incoming``: the remote revisions the local head lacks, see :func:`incoming`).
     ``branch`` = ``local_branch``; remote and behind/ahead/in_sync are vs remote ``main``.
     ok=False with error when lore.exe is missing, the folder has no .lore, or lore
     fails/times out. ``timeout`` applies to each of the 3 lore calls."""

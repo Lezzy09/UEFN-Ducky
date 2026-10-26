@@ -294,3 +294,45 @@ def test_detect_lore_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("LORE_CLI_LOCATION", str(exe))
     out = detect_urc.detect_lore_executable()
     assert out == {"available": True, "path": str(exe), "source": "lore_cli_location", "error": ""}
+
+
+def test_parse_history_creator_and_message() -> None:
+    hist = _hist(HISTORY_PERSONAL_12)
+    assert (hist[0]["creator"], hist[0]["message"]) == ("Nacht", "[Sauvegarde automatique] 1 modification")
+    assert (hist[1]["creator"], hist[1]["message"]) == ("Mich", "Test sync 4 - envoi 30s apres sauvegarde")
+    assert lore_cli.display_name("Michㅤㅤㅤㅤou") == "Mich ou"
+    assert lore_cli.display_name("Nachtㅤ") == "Nacht"
+
+
+def test_incoming_names_what_the_other_pc_pushed() -> None:
+    out = lore_cli.incoming(_hist(HISTORY_LOCAL_13), _hist(REMOTE_MAIN_15))
+    assert [(r["revision"], r["own"]) for r in out] == [(15, False)]
+    assert out[0]["message"].startswith("Test outil 2")
+    assert lore_cli.incoming(_hist(HISTORY_LOCAL_13), _hist(REMOTE_MAIN_13)) == []
+
+
+def test_incoming_own_check_in_of_the_autosave() -> None:
+    # Local still on the personal autosave 12; main's 13 merges it: behind, but nothing new.
+    out = lore_cli.incoming(_hist(HISTORY_PERSONAL_12), _hist(REMOTE_MAIN_13))
+    assert [(r["revision"], r["own"]) for r in out] == [(13, True)]
+
+
+def test_repo_state_lists_incoming(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(lore_cli, "_run_lore", _lore(STATUS_MAIN_13, SIG13, HISTORY_LOCAL_13, REMOTE_MAIN_15))
+    st = lore_cli.repo_state(str(island))
+    assert [r["revision"] for r in st["incoming"]] == [15]
+
+
+def test_remote_and_local_head_one_call_each(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeLore({("--remote", "history", "1", "--branch", "main"): REMOTE_MAIN_15, ("status",): STATUS_MAIN_13})
+    monkeypatch.setattr(lore_cli, "_run_lore", fake)
+    assert lore_cli.remote_head(str(island)) == {"ok": True, "revision": 15, "signature": SIG15, "error": ""}
+    assert lore_cli.local_head(str(island)) == {"ok": True, "revision": 13, "signature": SIG13, "error": ""}
+    assert len(fake.calls) == 2
+    monkeypatch.setattr(lore_cli, "_run_lore", lambda *a: (False, "lore history timed out after 30s"))
+    assert lore_cli.remote_head(str(island)) == {"ok": False, "error": "lore history timed out after 30s"}
+
+
+def test_heads_need_a_lore_folder(tmp_path: Path) -> None:
+    assert lore_cli.remote_head(str(tmp_path))["ok"] is False
+    assert lore_cli.local_head(str(tmp_path))["ok"] is False
