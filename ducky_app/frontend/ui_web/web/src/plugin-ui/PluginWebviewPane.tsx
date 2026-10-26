@@ -65,9 +65,12 @@ function postSync(iframe: HTMLIFrameElement | null, state: SyncState): void {
   iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "sync.state", ...state } }, "*");
 }
 
+type Follow = { device: string; leading: boolean; older: string[] };
+
 /** Bridge event `live.follow`: the group's leader whose screen this page follows (their
- * device), or "" for nobody; `leading` on the leader's own page. */
-function postFollow(iframe: HTMLIFrameElement | null, follow: { device: string; leading: boolean }): void {
+ * device), or "" for nobody; `leading` on the leader's own page; `older`: groupmates on an
+ * older app, whose clicks the leader does for everyone. */
+function postFollow(iframe: HTMLIFrameElement | null, follow: Follow): void {
   iframe?.contentWindow?.postMessage({ channel: BRIDGE_CHANNEL, event: { type: "live.follow", ...follow } }, "*");
 }
 
@@ -152,7 +155,7 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
   visibleRef.current = visible;
   const liveRef = useRef(false);
   const syncRef = useRef<SyncState>({ shared: false, incoming: 0 });
-  const followRef = useRef({ device: "", leading: false });
+  const followRef = useRef<Follow>({ device: "", leading: false, older: [] });
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !src) return;
@@ -318,8 +321,8 @@ export function PluginWebviewPane({ tabId, chatOverlay, visible = true }: Props)
             syncRef.current = state;
             postSync(iframeRef.current, state);
           }}
-          onFollow={(device, leading) => {
-            followRef.current = { device, leading };
+          onFollow={(device, leading, older) => {
+            followRef.current = { device, leading, older };
             postFollow(iframeRef.current, followRef.current);
           }}
           onScopeChanged={(status, change) =>

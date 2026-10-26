@@ -64,7 +64,7 @@ type Props = {
   /** Whose screen the page follows: the leader's device while Follow is on in their group,
    * else ""; `leading` while this PC leads a group with others in it (its screen is the
    * group's: members' clicks, plays and moves come to it). */
-  onFollow?: (device: string, leading: boolean) => void;
+  onFollow?: (device: string, leading: boolean, older: string[]) => void;
 };
 
 /** Follow the host's screen in a group this PC joined, per plugin and per viewer (on until
@@ -279,9 +279,13 @@ export function PluginScopeBar({ pluginId, onScopeChanged, active = true, onLive
   const hostDevice = joined?.hostDevice ?? "";
   const followDevice = follow && hostDevice && joined?.members.some((m) => m.device === hostDevice) ? hostDevice : "";
   const leading = liveOn && Boolean(status?.live?.groups?.some((g) => g.mine && g.hostIsMe && g.members.length > 1));
+  // Groupmates on an older app: the leader's page does their clicks for everyone.
+  const older = liveOn
+    ? (status?.live?.groups?.find((g) => g.mine)?.members ?? []).filter((m) => m.older && !m.me && m.device).map((m) => m.device).join(",")
+    : "";
   useEffect(() => {
-    followNotify.current?.(followDevice, leading);
-  }, [followDevice, leading]);
+    followNotify.current?.(followDevice, leading, older ? older.split(",") : []);
+  }, [followDevice, leading, older]);
   // "Connecting to …" turns into linked or "Can't reach" after the host's grace: read it again then.
   const connecting = (status?.live?.connecting ?? []).join(",");
   useEffect(() => {

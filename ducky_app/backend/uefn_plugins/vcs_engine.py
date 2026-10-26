@@ -79,6 +79,7 @@ import platform
 import random
 import re
 import shutil
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -2828,11 +2829,10 @@ def refresh(account: str, space: str, plugins: list[str], backend: Any, *, now: 
             fields.update(state="ok", error="")  # back on (its next round says otherwise if not)
         space_vcs.head_put(account, space, plugin, **fields)
         incoming[plugin] = max(0, remote - int(head["seq"]))
-    _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
-    roster = {"people": [dict(p) for p in got.people], "usage": dict(got.usage)}
-    old = space_vcs.presence_get(account, space)["roster"]
-    space_vcs.presence_put(account, space, with_devices(old, roster), now=now)
-    _roster_came(account, space, old, roster)
+    kept = _keep_roster(account, space, asked_at, got.people, got.usage, now=now)
+    if kept is not None:  # an older answer's locks are as old as its roster
+        _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
+        _roster_came(account, space, *kept)
     return {"state": "reset" if reset else "ok", "error": "", "incoming": incoming, "epoch": got.epoch,
             "importing": dict(got.importing)}
 
@@ -3167,6 +3167,33 @@ def device_label() -> str:
 DEVICES_MAX = 200  # PC names a space remembers (the oldest go first)
 
 
+_roster_lock = threading.Lock()
+_roster_asked: dict[tuple[str, str], float] = {}  # (account, space) -> when the call whose roster is kept was made
+
+
+def _keep_roster(account: str, space: str, asked_at: float, people: Iterable[Mapping[str, Any]],
+                 usage: Mapping[str, Any] | None = None, *, sent_sha: str | None = None,
+                 now: float) -> tuple[Any, dict[str, Any]] | None:
+    """Keeps the roster a call made at ``asked_at`` got back (``people``; heads' ``usage``) and
+    returns ``(old, new)`` for :func:`_roster_came`, or None when the answer to a later call was
+    kept already: two calls at once (a live beat and the scheduler's, a beat and heads) come
+    back in either order, and an older roster kept last shows teammates where they no longer
+    are (Live then ends for a group that is still together). ``sent_sha``: the beat sent."""
+    with _roster_lock:
+        if asked_at < _roster_asked.get((account, space), 0.0):
+            if sent_sha is not None:
+                space_vcs.presence_put(account, space, sent_sha=sent_sha, now=now)
+            return None
+        _roster_asked[(account, space)] = asked_at
+        old = space_vcs.presence_get(account, space)["roster"]
+        roster = dict(old) if isinstance(old, dict) else {}
+        roster["people"] = [dict(p) for p in people]
+        if usage is not None:
+            roster["usage"] = dict(usage)
+        space_vcs.presence_put(account, space, with_devices(old, roster), sent_sha=sent_sha, now=now)
+    return old, roster
+
+
 def with_devices(old: Any, roster: dict[str, Any]) -> dict[str, Any]:
     """``roster`` with every PC name seen in the space, by device id (``devices``): the
     names ``old`` kept plus those of its people. A PC keeps its name after it leaves, so
@@ -3235,8 +3262,13 @@ def presence_blob(account: str, space: str, plugins: Iterable[str], *, now: floa
                 row["holds"] = holds  # what this PC presses: teammates grey it out
     except Exception:  # noqa: BLE001 — presence never fails a beat
         _log.debug("live rooms in presence failed", exc_info=True)
-    # "label", never "device": a roster row's "device" is the device id the server adds.
-    return {"label": device_label(), "app": "open", "plugins": out}
+    # "label", never "device": a roster row's "device" is the device id the server adds. "ver":
+    # this app's version, so a teammate's app can tell what its live speaks.
+    try:
+        from frontend import __version__ as ver
+    except Exception:  # noqa: BLE001 — presence never fails a beat
+        ver = ""
+    return {"label": device_label(), "app": "open", "ver": str(ver), "plugins": out}
 
 
 def beat(account: str, space: str, backend: Any, plugins: Iterable[str], *, force: bool = False,
@@ -3259,11 +3291,10 @@ def beat(account: str, space: str, backend: Any, plugins: Iterable[str], *, forc
         # A failed beat counts as one: the next waits its 10 s, and goes again once due.
         space_vcs.presence_put(account, space, sent_sha=last["sent_sha"], now=now)
         return {"ok": False, "error": reason_of(got)}
-    roster = dict(last["roster"]) if isinstance(last["roster"], dict) else {}
-    roster["people"] = [dict(p) for p in got.people]
-    space_vcs.presence_put(account, space, with_devices(last["roster"], roster), sent_sha=sha, now=now)
-    _roster_came(account, space, last["roster"], roster)
-    _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
+    kept = _keep_roster(account, space, asked_at, got.people, sent_sha=sha, now=now)
+    if kept is not None:  # an older answer's locks are as old as its roster
+        _roster_came(account, space, *kept)
+        _locks_from(account, space, got.locks, now=now, asked_at=asked_at)
     return {"ok": True, "people": len(got.people)}
 
 

@@ -200,9 +200,13 @@ def _roster(account: str, *people: dict[str, Any]) -> None:
     space_vcs.presence_put(account, SPACE, {"people": list(people)}, sent_sha="", now=time.time())
 
 
-def _on(device: str, name: str, room: str, since: float, plugin: str = PLUGIN) -> dict[str, Any]:
+def _on(device: str, name: str, room: str, since: float, plugin: str = PLUGIN, *,
+        app: str = "") -> dict[str, Any]:
+    """A teammate live in ``room``, on an app as new as this one, or on ``app``: "1.2.433" (its
+    team service says the version, its live row nothing) or "1.2.434" (says nothing at all)."""
+    row = {"room": room, "since": since, **({} if app else {"v": live.PROTOCOL})}
     return {"device": device, "user": f"u_{name}", "user_name": name, "label": f"{name.upper()}-PC",
-            "plugins": {plugin: {"viewing": True, "live": {"room": room, "since": since}}}}
+            **({"ver": app} if app == "1.2.433" else {}), "plugins": {plugin: {"viewing": True, "live": row}}}
 
 
 def test_groups_are_named_by_their_host_with_who_is_in_them(team: dict[str, Any]) -> None:
@@ -395,6 +399,28 @@ def test_presence_goes_one_beat_at_a_time_and_again_when_the_room_moved_meanwhil
     live._beat_soon("acct", SPACE)
     assert settled(3) and beats == [True, True, True]  # nothing going: at once
     live.reset_for_tests()
+
+
+def test_an_older_roster_coming_back_last_never_ends_a_group_still_together(team: dict[str, Any]) -> None:
+    """A live beat and the scheduler's at once come back in either order: the roster of the
+    call made first, landing last, is not kept (it would show Cy outside the group, and Live
+    would end here as if Cy left)."""
+    account = team["account"]
+    t = time.time()
+    live.join(PLUGIN, "h:d_cy")
+    cy = _on("d_cy", "Cy", "h:d_cy", t - 60)
+    try:
+        kept = vcs_engine._keep_roster(account, SPACE, t + 2, [cy], now=t)
+        assert kept is not None
+        vcs_engine._roster_came(account, SPACE, *kept)
+        gone = {**cy, "plugins": {PLUGIN: {"viewing": True}}}  # Cy before going live, asked for earlier
+        assert vcs_engine._keep_roster(account, SPACE, t + 1, [gone], sent_sha="s1", now=t) is None
+        got = space_vcs.presence_get(account, SPACE)
+        assert got["roster"]["people"][0]["plugins"][PLUGIN]["live"]["room"] == "h:d_cy" and got["sent_sha"] == "s1"
+        live.end_lone_groups(account, SPACE)
+        assert live.status(PLUGIN)["on"] is True
+    finally:
+        vcs_engine._roster_asked.pop((account, SPACE), None)
 
 
 def test_switching_to_local_ends_live(team: dict[str, Any]) -> None:
@@ -772,6 +798,53 @@ def test_the_new_leader_gets_what_the_old_one_didnt_send(live_data: dict[str, An
     _roster(account, _on("d_mo", "Mo", "h:d_cy", since + 1))  # Cy left: Mo leads now
     assert live.send_changes() == 1  # still unsent here: it goes again, for Mo to send
     assert live.send_changes() == 0
+
+
+def test_a_pc_on_an_older_app_never_leads_a_group_and_sends_its_own_changes(live_data: dict[str, Any]) -> None:
+    """Presence says each PC's live version, and the team service its app's version. An app
+    from before groups ran through a leader relays nothing: the group runs through whoever up
+    to date has been in it longest, and the older PC's changes are its own to send."""
+    account, impl = live_data["account"], live_data["impl"]
+    since = time.time() - 60
+    _roster(account, _on("d_cy", "Cy", "h:d_cy", since, app="1.2.433"))  # Cy's room, Cy's app is older
+    live.join(PLUGIN, "h:d_cy")
+    assert live.room_of(PLUGIN, account, SPACE)["v"] == live.PROTOCOL  # what this PC's presence says
+    (g,) = live.status(PLUGIN)["groups"]
+    assert g["hostIsMe"] and [(m["name"], m["older"]) for m in g["members"]] == [("Cy", True), ("You", False)]
+    impl.peers = [{**CY, "path": "direct"}]
+    PluginData(PLUGIN).put("card.pip", {"hp": 1})
+    assert vcs_engine._build(_ctx(account), now=time.time()) == 1  # nobody to hold it for: this PC sends it
+    live.deliver(account, SPACE, PLUGIN, CY, live.DATA, _item("card.zed", {"hp": 2}, time.time()))
+    assert PluginData(PLUGIN).get("card.zed") == {"hp": 2}
+    assert _row(account, "card.zed")["dirty"] == 0  # Cy's app sends its own
+    # Mo, up to date and in the group before this PC, leads it; the older room's PC never does.
+    _roster(account, _on("d_cy", "Cy", "h:d_cy", since, app="1.2.433"), _on("d_mo", "Mo", "h:d_cy", since + 1))
+    (g,) = live.status(PLUGIN)["groups"]
+    assert (g["host"], g["hostDevice"], g["hostIsMe"]) == ("Mo", "d_mo", False)
+    # A group with nobody up to date in it is led by its room's PC, as before.
+    _roster(account, _on("d_bo", "Bo", "h:d_bo", since + 5, app="1.2.433"), _on("d_al", "Al", "h:d_bo", since, app="1.2.433"))
+    bo = next(g for g in live.status(PLUGIN)["groups"] if g["room"] == "h:d_bo")
+    assert bo["hostDevice"] == "d_bo"
+
+
+def test_a_pc_that_says_no_version_relays_like_1_2_434_until_what_it_sends_says_otherwise(
+        live_data: dict[str, Any]) -> None:
+    """1.2.434 runs its group through a leader but its presence says no version: its room is
+    its to lead, and a groupmate's change is its to send. A tab click with no origin (only an
+    app before the leader relay sends one) shows it is older after all."""
+    account = live_data["account"]
+    since = time.time() - 60
+    _roster(account, _on("d_cy", "Cy", "h:d_cy", since, app="1.2.434"))
+    live.join(PLUGIN, "h:d_cy")
+    (g,) = live.status(PLUGIN)["groups"]
+    assert (g["hostDevice"], g["hostIsMe"]) == ("d_cy", False) and not g["members"][0]["older"]
+    live.deliver(account, SPACE, PLUGIN, CY, live.NAV, {"anchor": "#video", "v": "v1", "o": "cy:1"})
+    assert not live.status(PLUGIN)["groups"][0]["members"][0]["older"]  # 1.2.434's clicks name their origin
+    live_data["pushed"].clear()
+    live.deliver(account, SPACE, PLUGIN, CY, live.NAV, {"anchor": "#video"})
+    (g,) = live.status(PLUGIN)["groups"]
+    assert g["members"][0]["older"] and g["hostIsMe"]  # 1.2.433's never do: this PC leads now
+    assert [e["type"] for e in live_data["pushed"]] == ["live_peers", "live_message"]  # the bar reads it again
 
 
 def test_each_pc_has_a_live_state_everyone_in_the_group_sees(team: dict[str, Any]) -> None:

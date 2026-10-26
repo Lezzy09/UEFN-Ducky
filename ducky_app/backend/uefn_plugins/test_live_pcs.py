@@ -42,8 +42,14 @@ LEDGER_METHODS = ("capabilities", "heads", "push", "pull", "fetch", "history", "
 # --------------------------------------------------------------------------- one PC (a child process)
 
 
-def pc_main(address: tuple[str, int], name: str) -> None:
-    """A PC: signs in as ``name``, has ``cards`` on the team copy, and does what the test says."""
+def pc_main(address: tuple[str, int], name: str, app: str = "") -> None:
+    """A PC: signs in as ``name``, has ``cards`` on the team copy, and does what the test says.
+    ``app``: an older app. "1.2.434" runs its group through a leader like this one, but its
+    presence names no version. "1.2.433" is from before that: its team service says its
+    version, its live changes say nothing of who made them, and it never holds a change for a
+    leader or sends one for a groupmate."""
+    import frontend
+
     from frontend import duckyos_account
     from frontend.ui_web import panel_api  # noqa: F401  (panel_api_store loads with it)
     from frontend.ui_web.panel_api_store import PanelApiStoreMixin
@@ -112,6 +118,8 @@ def pc_main(address: tuple[str, int], name: str) -> None:
 
         def live_send(self, account: str, space_id: str, plugin: str, topic: str, data: Any, *, to: str = "",
                       fast: bool = False) -> int:
+            if app == "1.2.433" and topic == live.DATA:
+                data = {k: v for k, v in data.items() if k != "by"}
             return int(rpc("send", topic, json.loads(json.dumps(data)), to))
 
         def live_state(self, account: str, space_id: str, plugin: str) -> dict[str, Any]:
@@ -123,6 +131,13 @@ def pc_main(address: tuple[str, int], name: str) -> None:
     space_vcs.head_put(account, SPACE, PLUGIN, engine="v2")
     scopes.data_live = lambda plugin: plugin == PLUGIN
     live._push = lambda event: None
+    if app:
+        frontend.__version__ = app if app == "1.2.433" else ""
+        room_of = live.room_of
+        live.room_of = lambda *a: None if (r := room_of(*a)) is None else {k: v for k, v in r.items() if k != "v"}
+    if app == "1.2.433":
+        live.hold_since = lambda *a, **k: None
+        live.leads = live._leads_group = lambda *a, **k: False
     rounds = threading.Lock()
 
     def sync() -> dict[str, Any]:
@@ -307,7 +322,7 @@ class Hub:
     def _room(self, pc: PC) -> list[PC]:
         return [p for p in self.pcs.values() if p is not pc and pc.room and p.room == pc.room]
 
-    def start(self, name: str) -> PC:
+    def start(self, name: str, *, app: str = "") -> PC:
         pc = self.pcs[name] = PC(name)
         root = self.tmp / name
         (root / "Roaming").mkdir(parents=True)
@@ -317,10 +332,10 @@ class Hub:
         code = ("import sys, importlib.util; sys.path.insert(0, sys.argv[1]);"
                 "spec = importlib.util.spec_from_file_location('live_pcs', sys.argv[2]);"
                 "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m);"
-                "m.pc_main((sys.argv[3], int(sys.argv[4])), sys.argv[5])")
+                "m.pc_main((sys.argv[3], int(sys.argv[4])), sys.argv[5], sys.argv[6])")
         host, port = self.listener.address
         pc.proc = subprocess.Popen([sys.executable, "-c", code, str(APP), str(Path(__file__).resolve()), host,
-                                    str(port), name], cwd=str(root), env=env)
+                                    str(port), name, app], cwd=str(root), env=env)
         deadline = time.monotonic() + 60
         while pc.ctl is None:
             if time.monotonic() > deadline or pc.proc.poll() is not None:
@@ -448,3 +463,42 @@ def test_two_pcs_that_start_live_at_once_end_up_in_one_group(hub: Hub) -> None:
     low = min((ana, ben), key=lambda p: p.device)
     until(lambda: _mine(ana).get("room") == _mine(ben).get("room") == f"h:{low.device}", "one group")
     assert len(_mine(ana)["members"]) == len(_mine(ben)["members"]) == 2
+
+
+def test_an_older_app_hosts_the_group_the_up_to_date_pc_leads_and_each_sends_its_own(hub: Hub) -> None:
+    laptop = hub.start("Iliya", app="1.2.433")
+    tas = hub.start("Tas")
+    assert laptop("start")["ok"]
+    _go_live(tas, laptop)  # Start live goes into the older PC's group
+    until(lambda: len(_mine(tas).get("members", [])) == 2, "Tas in the Laptop's group")
+    mine = _mine(tas)
+    assert mine["hostIsMe"] and [(m["name"], m["older"]) for m in mine["members"] if not m["me"]] == [("Iliya", True)]
+    # Tas's change: at the Laptop at once, and out from Tas at once (nobody to hold it for).
+    tas("put", "card.pip", {"hp": 3})
+    until(lambda: laptop("get", "card.pip") == {"hp": 3}, "the Laptop to get Tas's change live")
+    assert tas("sync")["pushed"] == 1
+    # The Laptop's change: at Tas's at once as a pulled copy; the Laptop's app sends it.
+    laptop("put", "card.zed", {"hp": 1})
+    until(lambda: tas("get", "card.zed") == {"hp": 1}, "Tas to get the Laptop's change live")
+    assert tas("row", "card.zed")["dirty"] == 0
+    laptop("sync")  # (Tas's commit note may have had it pull and send already)
+    made = {tuple(e["items"][0]): (e["by"], e.get("via")) for e in tas("history")}
+    assert made[("doc", "card.pip")] == ("Tas", None) and made[("doc", "card.zed")] == ("Iliya", None)
+
+
+def test_a_pc_that_says_no_version_still_leads_its_group_like_1_2_434(hub: Hub) -> None:
+    ana = hub.start("Ana", app="1.2.434")
+    ben = hub.start("Ben")
+    assert ana("start")["ok"]
+    _go_live(ben, ana)
+    until(lambda: len(_mine(ana).get("members", [])) == 2, "Ben in Ana's group")
+    mine = _mine(ben)
+    assert mine["hostDevice"] == ana.device and not any(m["older"] for m in mine["members"])
+    ben("put", "card.pip", {"hp": 3})
+    until(lambda: ana("get", "card.pip") == {"hp": 3}, "Ana to get Ben's change live")
+    assert ana("row", "card.pip")["dirty"] == 1  # Ana leads: hers to send, for Ben
+    ben("sync")
+    assert not hub.server.space(SPACE).repo(PLUGIN).changesets  # Ben held it for Ana
+    assert ana("sync")["pushed"] == 1
+    (entry,) = until(lambda: [e for e in ben("history") if ["doc", "card.pip"] in e["items"]], "the change in history")
+    assert (entry["by"], entry["via"]) == ("Ben", "Ana")

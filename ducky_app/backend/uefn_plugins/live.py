@@ -84,6 +84,13 @@ _VIEW_RE = re.compile(r"^[A-Za-z0-9._:-]{0,64}$")
 _TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,39}$")
 _ROOM_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 HOST_PREFIX = "h:"
+# What this app's live speaks, said in presence with the room: 2, the group runs through its
+# leader (asks, shared values, data). An app from before that (1.2.433 and older) relays
+# nothing: it never leads a group someone up to date is in, its changes are its own to send,
+# and its screen doesn't follow the group (the Live menu says who needs to update).
+PROTOCOL = 2
+RELAY_SINCE = (1, 2, 434)  # the first app version whose groups run through a leader (no "v" yet)
+LEGACY_MAX = 500
 
 
 class _State:
@@ -113,6 +120,7 @@ _shared: dict[str, dict[str, dict[str, Any]]] = {}  # plugin -> key -> {v, ver, 
 _shared_sent: dict[str, float] = {}  # plugin -> when the leader last sent them all again
 _marks: dict[tuple[str, str, str], float] = {}  # (account, space, plugin) -> newest write sent live
 _outbox: list[threading.Thread] = []
+_legacy: set[str] = set()  # devices whose messages only an app before RELAY_SINCE sends
 _beating: dict[tuple[str, str], bool] = {}  # (account, space) -> a beat is going; True: one more after it
 
 
@@ -208,7 +216,7 @@ def room_of(plugin: str, account: str, space: str) -> dict[str, Any] | None:
         st = _live.get(plugin)
     if st is None or (st.account, st.space) != (account, space):
         return None
-    return {"room": st.room, "since": st.since}
+    return {"room": st.room, "since": st.since, "v": PROTOCOL}
 
 
 def _beat_soon(account: str, space: str) -> None:
@@ -798,10 +806,11 @@ def _share_tick(now: float) -> None:
 def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
     """The live groups of ``plugin`` in the space, from its last roster: ``room``, ``host``
     (name), ``hostDevice``, ``hostIsMe``, ``members`` (``name``, ``user``, ``device``,
-    ``label``, ``me``; the first to come first) and ``mine``. The host is the PC the room is
-    named after while it is in it; once it left, the group passes to whoever has been in it
-    longest, which every PC works out the same from the roster (no vote, no message). This
-    PC counts at once, before its next beat. Its own group first, then the biggest."""
+    ``label``, ``me``, ``older``: on an app older than :data:`PROTOCOL`; the first to come
+    first) and ``mine``. The host leads the group: the PC the room is named after while it is
+    in it, else whoever has been in it longest, which every PC works out the same from the
+    roster (no vote, no message); a PC on an older app leads only when nobody up to date is in
+    it. This PC counts at once, before its next beat. Its own group first, then the biggest."""
     from backend.store.repos import space_vcs
     from backend.uefn_plugins.ledger import person
     from backend.uefn_plugins.vcs_engine import other_pc
@@ -826,21 +835,57 @@ def groups(plugin: str, account: str, space: str) -> list[dict[str, Any]]:
         rooms.setdefault(room, []).append({
             "name": f"You on {pc}" if pc else person(p.get("user_name"), p.get("user"), fallback="A teammate"),
             "user": str(p.get("user") or ""), "device": str(p["device"]), "label": str(p.get("label") or ""),
-            "me": False, "since": since})
+            "me": False, "since": since, "older": _older(p, live)})
     mine = room_of(plugin, account, space)
     if mine is not None:
         rooms.setdefault(mine["room"], []).append(
-            {"name": "You", "user": "", "device": me, "label": "", "me": True, "since": mine["since"]})
+            {"name": "You", "user": "", "device": me, "label": "", "me": True, "since": mine["since"], "older": False})
     out = []
     for room, members in rooms.items():
         members.sort(key=lambda m: (m["since"], m["device"]))
         host_device = room[len(HOST_PREFIX):] if room.startswith(HOST_PREFIX) else ""
-        host = next((m for m in members if m["device"] == host_device), members[0])
+        leaders = [m for m in members if not m["older"]] or members  # an older app relays nothing
+        host = next((m for m in leaders if m["device"] == host_device), leaders[0])
         out.append({"room": room, "host": host["name"], "hostDevice": host["device"], "hostIsMe": host["me"],
-                    "members": [{k: m[k] for k in ("name", "user", "device", "label", "me", "since")} for m in members],
+                    "members": [{k: m[k] for k in ("name", "user", "device", "label", "me", "since", "older")}
+                                for m in members],
                     "mine": mine is not None and mine["room"] == room})
     out.sort(key=lambda g: (not g["mine"], -len(g["members"]), g["host"].lower()))
     return out
+
+
+def _older(person: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Whether a teammate's app is from before groups ran through a leader. Its live row's
+    ``v`` says it is up to date; else its app version (``ver``, which the team service adds
+    to presence) says; a PC that says neither (1.2.434) is taken as relaying, unless what it
+    sends gave it away (:func:`_note_legacy`)."""
+    from backend.uefn_plugins.plugin_version import parse_plugin_version
+
+    try:
+        if int(row.get("v") or 0) >= PROTOCOL:
+            return False
+    except (TypeError, ValueError):
+        pass
+    ver = parse_plugin_version(person.get("ver"))
+    if ver != (0, 0, 0):
+        return ver < RELAY_SINCE
+    return str(person.get("device") or "") in _legacy
+
+
+def _note_legacy(account: str, space: str, plugin: str, who: dict[str, str], topic: str, data: Any) -> None:
+    """A tab click with no origin, or a change saying nothing of who made it: only an app
+    from before groups ran through a leader sends those. The bar and the group's leader
+    learn it at once (its presence may not say its version yet)."""
+    device = who.get("device", "")
+    if not device or device in _legacy or not isinstance(data, dict):
+        return
+    if not ((topic == NAV and not data.get("o")) or (topic == DATA and "by" not in data)):
+        return
+    with _lock:
+        if len(_legacy) >= LEGACY_MAX:
+            _legacy.clear()
+        _legacy.add(device)
+    peers_changed(account, space, plugin)
 
 
 def status(plugin: str) -> dict[str, Any]:
@@ -1006,6 +1051,7 @@ def deliver(account: str, space: str, plugin: str, sender: dict[str, Any], topic
     if st is None:
         return
     who = {k: str(sender.get(k) or "") for k in ("name", "user", "device", "label")}
+    _note_legacy(account, space, plugin, who, topic, data)
     if topic == DATA:  # by the person's own name: a change this PC sends for them says who made it
         _apply_data(account, space, plugin, who, data)
         return
@@ -1213,11 +1259,12 @@ def leads(account: str, space: str, plugin: str, sender: str = "") -> bool:
 
 
 def _leads_group(account: str, space: str, plugin: str, sender: str = "") -> bool:
-    """This PC leads its live group of ``plugin``, with ``sender`` in it as the roster shows."""
+    """This PC leads its live group of ``plugin``, with ``sender`` in it as the roster shows. A
+    groupmate on an older app sends its own (it never holds anything for a leader)."""
     if room_of(plugin, account, space) is None:
         return False
     mine = _my_group(plugin, account, space)
-    devices = {str(m["device"]) for m in (mine or {}).get("members") or [] if not m["me"]}
+    devices = {str(m["device"]) for m in (mine or {}).get("members") or [] if not m["me"] and not m["older"]}
     return bool(mine and mine["hostIsMe"] and devices and (not sender or sender in devices))
 
 
@@ -1421,6 +1468,7 @@ def reset_for_tests() -> None:
         _shared_sent.clear()
         _marks.clear()
         _beating.clear()
+        _legacy.clear()
 
 
 class LiveApi:

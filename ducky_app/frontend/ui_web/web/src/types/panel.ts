@@ -2461,13 +2461,14 @@ export interface PluginLivePeer {
  * the PC that started it. */
 export interface PluginLiveGroup {
   room: string;
-  /** The host's name: the PC the room is named after while it is in it, else whoever has
-   * been in the group longest. */
+  /** The leader's name: the PC the room is named after while it is in it, else whoever has
+   * been in the group longest; one on an older app leads only when nobody up to date is in it. */
   host: string;
   hostDevice?: string;
   hostIsMe?: boolean;
-  /** The first to come first; this PC is `me`. */
-  members: { name: string; user?: string; device?: string; label?: string; me?: boolean }[];
+  /** The first to come first; this PC is `me`. `older`: on an older UEFN Ducky, whose screen
+   * doesn't follow the group (the leader still does their tab clicks for everyone). */
+  members: { name: string; user?: string; device?: string; label?: string; me?: boolean; older?: boolean }[];
   /** This PC is in it. */
   mine?: boolean;
 }

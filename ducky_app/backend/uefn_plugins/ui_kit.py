@@ -438,7 +438,7 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
   var following = "", replaying = false, scrolled = [], sentView = "", viewAt = 0, holdsAsk = "";
   var lead = null, wentTo = "", wentFrom = "", wentAt = 0, scrolledTo = "", peers = {}, reached = {};
   var leading = false, me = Math.random().toString(36).slice(2, 10), seq = 0, leadAt = "", askedAt = "";
-  var appliedAt = 0, selfScrollAt = 0;
+  var appliedAt = 0, selfScrollAt = 0, older = {};
   var HOLD_AFTER_MS = 1500, HOLD_RENEW_MS = 10000, HOLD_STALE_MS = 30000, VIEW_GAP_MS = 250, VIEW_EVERY_MS = 5000;
   var ECHO_MS = 400, OWN_SCROLL_MS = 1000;
   var CONTROL = 'input,textarea,select,button,[contenteditable=""],[contenteditable="true"],[role="button"],[role="slider"],' +
@@ -705,7 +705,14 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     appliedAt = Date.now();
     return true;
   }
+  // A groupmate on an older app (``older``) asks nobody and its screen follows only the room's
+  // PC: every page on the group's screen does its tab clicks straight away (nobody relays them,
+  // so it never hears its own click back). Its scroll and screen stay its own.
   function theirNav(f, d) {
+    if (older[key(f)] && !d.ask) {
+      if ((leading || following) && here(d.v)) navigate(d);
+      return;
+    }
     if (leading && d.ask) {  // a member's click: the leader does it, then everyone (theirs once)
       if (here(d.v) && navigate(d)) req("live.nav", { anchor: d.anchor, v: d.v, o: String(d.o || "") });
       return;
@@ -828,8 +835,12 @@ LIVE_PRESENCE_SCRIPT = r"""<script>(function () {
     else if (e.type === "live.message" && on && e.topic === "ducky.view") theirView(from, e.data || {});
     else if (e.type === "live.message" && on && e.topic === "ducky.nav") theirNav(from, e.data || {});
     else if (e.type === "live.follow") {
-      following = String(e.device || ""); leading = !!e.leading;
-      lead = null; wentTo = wentFrom = scrolledTo = leadAt = askedAt = "";
+      if (String(e.device || "") !== following || !!e.leading !== leading) {  // not when only ``older`` moved
+        following = String(e.device || ""); leading = !!e.leading;
+        lead = null; wentTo = wentFrom = scrolledTo = leadAt = askedAt = "";
+      }
+      older = {};
+      (Array.isArray(e.older) ? e.older : []).forEach(function (o) { older[String(o)] = 1; });
     }
     else if (e.type === "live.holds") farHolds(e.holds);
     else if (e.type === "live.peers") {

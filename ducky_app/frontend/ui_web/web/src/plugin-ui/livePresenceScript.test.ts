@@ -406,3 +406,51 @@ it("a member's own move to another screen or scroll goes to the leader, which go
   document.body.removeAttribute("data-live-view");
   tell({ type: "live.follow", device: "", leading: false });
 });
+
+it("a groupmate on an older app: every page on the group's screen does its tab clicks, and nobody relays them", () => {
+  document.body.insertAdjacentHTML("beforeend", '<button role="tab" id="video-tab">Video</button><div id="list" style="overflow:auto"></div>');
+  const clicks = vi.fn();
+  document.getElementById("video-tab")?.addEventListener("click", clicks);
+  const list = document.getElementById("list") as HTMLElement;
+  const went: string[] = [];
+  const onGo = (e: Event) => went.push((e as CustomEvent<{ view: string }>).detail.view);
+  window.addEventListener("ducky-live-goto", onGo);
+  document.body.setAttribute("data-live-view", "p1:video");
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.follow", device: "", leading: true, older: ["d2"] });  // Sam's app is older
+  // An older app's click asks nobody and names no origin or screen: the leader does it, and
+  // passes it on to nobody (Sam would hear it back and click it twice).
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]' } });
+  expect(clicks).toHaveBeenCalledTimes(1);
+  expect(navs()).toEqual([]);
+  tell({ type: "live.message", topic: "ducky.nav", from: ALEX, data: { anchor: '[id="video-tab"]', o: "alex:1" } });
+  expect(clicks).toHaveBeenCalledTimes(1);  // Alex is up to date: only Alex's asks are the leader's to do
+  // Its screen and scroll stay its own.
+  tell({ type: "live.message", topic: "ducky.view", from: SAM, data: { v: "vs", at: "p1:rules", scroll: [{ anchor: '[id="list"]', top: 300, left: 0 }] } });
+  expect(went).toEqual([]);
+  expect(list.scrollTop).toBe(0);
+  // A member on the group's screen does it too; one who turned that off doesn't.
+  tell({ type: "live.follow", device: "d1", leading: false, older: ["d2"] });
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]' } });
+  expect(clicks).toHaveBeenCalledTimes(2);
+  tell({ type: "live.follow", device: "", leading: false, older: ["d2"] });
+  tell({ type: "live.message", topic: "ducky.nav", from: SAM, data: { anchor: '[id="video-tab"]' } });
+  expect(clicks).toHaveBeenCalledTimes(2);
+  window.removeEventListener("ducky-live-goto", onGo);
+  document.body.removeAttribute("data-live-view");
+  tell({ type: "live.follow", device: "", leading: false });
+});
+
+it("an update to who is on an older app keeps a member's place on the group's screen", () => {
+  document.body.setAttribute("data-live-view", "p1:video");
+  tell({ type: "live.state", on: true });
+  tell({ type: "live.follow", device: "d1", leading: false, older: [] });
+  const v = sent.find((m) => m.method === "live.view")?.params.v as string;
+  tell({ type: "live.message", topic: "ducky.view", from: ALEX, data: { v, at: "p1:video", scroll: [] } });
+  tell({ type: "live.follow", device: "d1", leading: false, older: ["d2"] });  // someone older joined
+  sent.length = 0;
+  vi.advanceTimersByTime(5000);
+  expect(sent.filter((m) => m.method === "live.view")).toEqual([]);  // still where the leader is: nothing to ask
+  document.body.removeAttribute("data-live-view");
+  tell({ type: "live.follow", device: "", leading: false });
+});

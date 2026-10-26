@@ -44,6 +44,8 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
       .filter((name) => !connecting.includes(name))
     : [];
   const size = (g: PluginLiveGroup) => `${g.members.length} ${g.members.length === 1 ? "person" : "people"}`;
+  // Groupmates on an older app: their screen doesn't follow the group (the leader does their clicks).
+  const older = live?.on ? (mine?.members ?? []).filter((m) => m.older && !m.me).map((m) => m.name) : [];
 
   return (
     <div className="plugin-scope-menu" role="menu" aria-label={`Live in ${plugin}`}>
@@ -83,6 +85,13 @@ export function PluginLiveMenu({ pluginId, status, busy, onJoin, onLeave, follow
       ) : mine?.hostIsMe && mine.members.length > 1 && live?.on ? (
         <div className="plugin-scope-menu__note">
           You lead the group: everyone sees your screen, and their tab clicks, play and scrolling come through you.
+        </div>
+      ) : null}
+      {older.length ? (
+        <div className="plugin-scope-menu__note plugin-scope-menu__note--warn">
+          {listText(older)} {older.length === 1 ? "needs" : "need"} to update UEFN Ducky. Until then{" "}
+          {older.length === 1 ? "their screen doesn't" : "their screens don't"} follow the group, but their tab clicks
+          still reach everyone.
         </div>
       ) : null}
       {connecting.length ? (
