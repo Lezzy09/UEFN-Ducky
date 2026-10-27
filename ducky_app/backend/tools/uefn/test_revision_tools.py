@@ -11,7 +11,7 @@ import pytest
 from backend.tools.uefn import level_viewport
 
 
-def fake_lore(*, paths=None, states=None, both=None):
+def fake_lore(*, paths=None, states=None, both=None, marked=None):
     states = list(states or [{"ok": True, "in_sync": True, "behind": 0, "ahead": 0}])
     calls = []
 
@@ -27,7 +27,12 @@ def fake_lore(*, paths=None, states=None, both=None):
         calls.append(("overlap", root))
         return both or {"ok": True, "files": [], "error": ""}
 
-    return SimpleNamespace(repo_state=repo_state, pending_paths=pending_paths, overlap=overlap, calls=calls)
+    def conflict_marked(files):
+        calls.append(("conflict_marked", len(files)))
+        return [f for f in files if f in (marked or [])]
+
+    return SimpleNamespace(repo_state=repo_state, pending_paths=pending_paths, overlap=overlap,
+                           conflict_marked=conflict_marked, calls=calls)
 
 
 @pytest.fixture(autouse=True)
@@ -58,7 +63,7 @@ def test_push_checks_in_the_pending_files_then_confirms(root) -> None:
         "revision_check_in",
         {"files": ["C:/Islands/MyIsland/Content/A.uasset"], "description": "moved the cube"},
     )
-    assert lore.calls == [("repo_state", root), ("pending_paths", root), ("repo_state", root)]
+    assert lore.calls == [("repo_state", root), ("pending_paths", root), ("conflict_marked", 1), ("repo_state", root)]
     assert out == {"ok": True, "checked_in": 2, "saved": 1, "in_sync": True, "behind": 0, "ahead": 0, "error": ""}
 
 
@@ -219,7 +224,7 @@ def test_forced_pull_over_both_changed_files_names_the_conflicted_ones(root) -> 
         "revision_conflicts", {"paths": [VERSE["path"], other["path"]]})
     assert out["ok"] is True and out["conflicted"] == ["Content/x.verse"]
     assert [f["rel"] for f in out["both_changed"]] == ["Content/x.verse", "Content/B.uasset"]
-    assert "Resolve Conflicts" in out["hint"]
+    assert '"Resolve Conflict" ("Résoudre conflit")' in out["hint"] and "Résolution des conflits" in out["hint"]
 
 
 def test_forced_pull_with_an_older_listener_still_warns(root) -> None:
@@ -240,3 +245,64 @@ def test_force_alone_does_not_pull_over_files_changed_on_both_pcs(root) -> None:
         out = json.loads(level_viewport.revision_pull(force=True))
     assert out["ok"] is False and out["both_changed"] and "allow_both_changed=true" in out["error"]
     send.assert_not_called()
+
+
+# Oct 27, live: Lore merged the Verse file, UEFN then held the editor behind this dialog, and
+# the host's revision_sync call failed with "UEFN listener is not running".
+CONFLICT_POPUP = {"hwnd": 77, "title": "Modifications en conflit", "rect": {}, "blocking": True, "enabled": True}
+
+
+@pytest.fixture
+def popups_on_screen():
+    from backend.tools.core import uefn_popups
+
+    shown: list[dict] = []
+    with patch.object(uefn_popups, "list_popups", side_effect=lambda: [dict(p) for p in shown]), \
+            patch.object(uefn_popups, "press_button") as press:
+        yield shown
+    press.assert_not_called()  # the person answers it, never Ducky
+
+
+@pytest.mark.parametrize("sync", [ConnectionError("UEFN listener is not running"), TimeoutError("timed out"),
+                                  {"ok": False, "synced": False, "error": "sync failed"}])
+def test_pull_behind_unreals_conflict_dialog_explains_it(root, popups_on_screen, sync) -> None:
+    popups_on_screen.append(CONFLICT_POPUP)
+    lore = fake_lore(states=BEHIND, both={"ok": True, "files": [VERSE], "error": ""})
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        send.side_effect = [sync]
+        out = json.loads(level_viewport.revision_pull(allow_both_changed=True))
+    assert send.call_count == 1
+    assert out == {"ok": False, "conflict_dialog": True,
+                   "both_changed": [{"rel": "Content/x.verse", "local": "modified", "remote": "M"}],
+                   "hint": level_viewport.CONFLICT_DIALOG_HINT}
+    hint = out["hint"]
+    assert hint.startswith('UEFN is showing its "Conflicting Changes" dialog ("Modifications en conflit")')
+    for name in ("never press it", "Examiner les conflits", "Résolution des conflits", "Tout ce qui est actuel",
+                 "Tout ce qui est entrant", "Résoudre dans VS Code", "Résoudre conflit", "revision_push"):
+        assert name in hint
+
+
+def test_a_failed_pull_without_the_dialog_keeps_the_error(root, popups_on_screen) -> None:
+    popups_on_screen.append(dict(CONFLICT_POPUP, title="Message Log"))
+    lore = fake_lore(states=BEHIND)
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command", side_effect=ConnectionError("UEFN listener is not running")):
+        out = json.loads(level_viewport.revision_pull())
+    assert out["ok"] is False and "conflict_dialog" not in out
+    assert out["error"] == "UEFN listener is not running" and out["reloaded"] is False
+
+
+def test_push_refuses_a_file_that_still_has_conflict_markers(root) -> None:
+    merged = "C:/Islands/MyIsland/Content/conflict_test.verse"
+    lore = fake_lore(paths=["C:/Islands/MyIsland/Content/A.uasset", merged], marked=[merged])
+    with patch.object(level_viewport, "_lore_cli", return_value=lore), \
+            patch.object(level_viewport, "send_command") as send:
+        out = json.loads(level_viewport.revision_push("merged"))
+    send.assert_not_called()
+    assert out == {
+        "ok": False,
+        "conflict_markers": ["Content/conflict_test.verse"],
+        "error": "Content/conflict_test.verse still has conflict markers from a merge: resolve it "
+        "(UEFN's Conflict resolution tab or VS Code) before pushing",
+    }

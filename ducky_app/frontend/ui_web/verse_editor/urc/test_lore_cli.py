@@ -327,8 +327,13 @@ def test_remote_and_local_head_one_call_each(island: Path, monkeypatch: pytest.M
     fake = FakeLore({("--remote", "history", "1", "--branch", "main"): REMOTE_MAIN_15, ("status",): STATUS_MAIN_13})
     monkeypatch.setattr(lore_cli, "_run_lore", fake)
     assert lore_cli.remote_head(str(island)) == {"ok": True, "revision": 15, "signature": SIG15, "error": ""}
-    assert lore_cli.local_head(str(island)) == {"ok": True, "revision": 13, "signature": SIG13, "error": ""}
+    assert lore_cli.local_head(str(island)) == {"ok": True, "revision": 13, "signature": SIG13, "changes": [],
+                                                "error": ""}
     assert len(fake.calls) == 2
+    # The same status call lists the working tree (the island watch's overlap reads it).
+    fake.outputs[("status",)] = STATUS_WORKTREE
+    assert lore_cli.local_head(str(island))["changes"][:2] == [("A", "Content/Python/init_unreal.py"),
+                                                               ("M", "test_ducky_v2.uefnproject")]
     monkeypatch.setattr(lore_cli, "_run_lore", lambda *a: (False, "lore history timed out after 30s"))
     assert lore_cli.remote_head(str(island)) == {"ok": False, "error": "lore history timed out after 30s"}
 
@@ -530,3 +535,37 @@ def test_overlap_errors_never_raise(island: Path, monkeypatch: pytest.MonkeyPatc
                                                           "error": "lore revision timed out after 60s"}
     assert lore_cli.overlap(str(island), state={"ok": False, "error": "no lore"})["error"] == "no lore"
     assert lore_cli.overlap(str(island), state={"ok": True, "behind": True})["ok"] is False  # malformed
+
+
+# Oct 27, live: Lore merged a Verse file changed on both PCs with these markers, and wrote
+# conflict_test.verse~base / ~mine / ~theirs beside it.
+MERGED_VERSE = """using { /Verse.org/Simulation }
+<<<<<<< ours
+# laptop edit
+||||||| original
+=======
+# main PC edit
+>>>>>>> theirs
+"""
+
+
+def test_pending_paths_never_lists_lores_merge_side_files(island: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sides = ("", "~base", "~mine", "~THEIRS")
+    status = STATUS_MAIN_13 + "Untracked files:\n" + "".join(f"A Content/conflict_test.verse{s}\n" for s in sides)
+    for s in sides:
+        _touch(island, f"Content/conflict_test.verse{s}")
+    monkeypatch.setattr(lore_cli, "_run_lore", _lore(status, SIG13, HISTORY_LOCAL_13, REMOTE_MAIN_15))
+    assert lore_cli.pending_paths(str(island))["paths"] == [f"{island.as_posix()}/Content/conflict_test.verse"]
+
+
+def test_conflict_marked_finds_lore_markers_in_text_files_only(tmp_path: Path) -> None:
+    merged = tmp_path / "conflict_test.verse"
+    merged.write_text(MERGED_VERSE, encoding="utf-8")
+    clean = tmp_path / "clean.verse"
+    clean.write_text("# <<<<<<< not at a line start\nx := 1\n", encoding="utf-8")
+    half = tmp_path / "half.json"
+    half.write_text("<<<<<<< ours\n{}\n", encoding="utf-8")
+    binary = tmp_path / "A.uasset"
+    binary.write_bytes(MERGED_VERSE.encode())
+    paths = [p.as_posix() for p in (merged, clean, half, binary)] + [(tmp_path / "gone.verse").as_posix()]
+    assert lore_cli.conflict_marked(paths) == [merged.as_posix()]

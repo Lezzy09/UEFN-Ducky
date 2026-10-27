@@ -21,6 +21,7 @@ class FakeLore:
         self.lock_calls = 0
         self.both: list[str] = []
         self.overlap_calls = 0
+        self.overlap_states: list[dict] = []
 
     def remote_head(self, root):
         self.calls.append("remote_head")
@@ -37,6 +38,7 @@ class FakeLore:
     def overlap(self, root, *, state=None):
         assert state is not None  # reuses the round's repo_state: no extra status/history calls
         self.overlap_calls += 1
+        self.overlap_states.append(state)
         return {"ok": True, "files": [{"rel": rel, "local": "modified", "remote": "M"} for rel in self.both],
                 "error": ""}
 
@@ -299,22 +301,52 @@ def test_news_names_files_changed_on_both_pcs(env) -> None:
     assert env.doc["both_changed"] == ["Content/conflict_test.verse"]
     out = iw.for_agents()
     assert out["both_changed"] == ["Content/conflict_test.verse"] and "both_changed" in out["hint"]
-    # Only news costs the overlap: a quiet round reads nothing more, and keeps the list.
+    # While behind, a quiet round checks the overlap again (one diff), and keeps the list: no new alert.
     iw.tick()
-    assert env.lore.overlap_calls == 1 and env.doc["both_changed"] == ["Content/conflict_test.verse"]
+    assert env.lore.overlap_calls == 2 and env.doc["both_changed"] == ["Content/conflict_test.verse"]
+    assert len(env.alerts) == 1
     # Pulled: nothing changed on both sides any more.
     env.lore.local = {"ok": True, "revision": 15, "signature": "s15", "error": ""}
     env.lore.state = IN_SYNC_15
     iw.tick()
     assert env.doc["both_changed"] == [] and "both_changed" not in (iw.for_agents() or {}).get("hint", "")
+    iw.tick()  # up to date: no overlap any more
+    assert env.lore.overlap_calls == 2
 
 
 def test_no_overlap_for_own_check_ins_or_without_news(env) -> None:
     env.lore.state = behind_15(own=True)
     iw.tick()
+    iw.tick()  # behind, but nothing was told: no overlap on quiet rounds either
     assert env.lore.overlap_calls == 0 and env.doc["both_changed"] == []
 
 
 def test_both_text() -> None:
     assert iw.both_text([]) == ""
     assert iw.both_text(["a", "b", "c", "d", "e"]) == "5 files changed on both PCs: a, b, c (+2 more) — pull with care"
+
+
+def test_a_file_changed_here_after_the_alert_gets_one_follow_up(env) -> None:
+    # Oct 27, live: the Verse file edited in VS Code showed in lore status only after the alert.
+    env.lore.state = behind_15()
+    env.lore.state["changes"] = []
+    iw.tick()
+    assert len(env.alerts) == 1 and env.doc["both_changed"] == []
+    env.lore.both = ["Content/conflict_test.verse"]
+    env.lore.local = {**env.lore.local, "changes": [("M", "Content/conflict_test.verse")]}
+    iw.tick()
+    # The overlap read this round's working tree, on the told state.
+    assert env.lore.overlap_states[-1]["changes"] == [("M", "Content/conflict_test.verse")]
+    assert env.lore.overlap_states[-1]["remote_signature"] == "s15"
+    assert env.alerts[1] == ("test_ducky_v2", "Changed on both PCs.",
+                             "Content/conflict_test.verse was also changed on this PC — pull with care. "
+                             "Ask a Ducky to run revision_pull when you're ready.")
+    assert env.pushes[-1]["detail"] == "Content/conflict_test.verse was also changed on this PC — pull with care"
+    assert env.doc["both_changed"] == ["Content/conflict_test.verse"] and env.doc["behind"] is True
+    assert "both_changed" in iw.for_agents()["hint"]
+    # Same files next round: no second alert. One left again: the list follows, still no alert.
+    iw.tick()
+    assert len(env.alerts) == 2
+    env.lore.both = []
+    iw.tick()
+    assert len(env.alerts) == 2 and env.doc["both_changed"] == []

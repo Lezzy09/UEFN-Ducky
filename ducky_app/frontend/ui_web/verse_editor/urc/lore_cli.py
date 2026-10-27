@@ -42,6 +42,13 @@ _me_cache: dict[str, tuple[float, dict[str, str]]] = {}
 _me_lock = threading.Lock()
 # Per-user editor collections, never shared between PCs.
 _EXCLUDED_PREFIX = "content/developers/"
+# Lore's copies beside a text file it merged with conflicts (Oct 27): never pushed.
+_SIDE_FILE_RE = re.compile(r"~(base|mine|theirs)$", re.IGNORECASE)
+# Text files a merge can leave conflict markers in, read up to this many bytes each.
+_TEXT_EXTS = frozenset({".verse", ".txt", ".json", ".ini", ".uefnproject", ".uplugin", ".csv"})
+_MARKER_MAX_BYTES = 512 * 1024
+_MARKER_OPEN_RE = re.compile(r"^<{7} ", re.MULTILINE)
+_MARKER_CLOSE_RE = re.compile(r"^>{7} ", re.MULTILINE)
 # How this PC changed a file (``overlap``'s ``local``).
 _CHANGE_WORDS = {"A": "added", "M": "modified", "D": "deleted"}
 
@@ -194,7 +201,8 @@ def parse_revision_diff(text: str) -> list[tuple[str, str]]:
 
 
 def _excluded(rel: str) -> bool:
-    return (rel.lower().rstrip("/") + "/").startswith(_EXCLUDED_PREFIX)
+    rel = rel.rstrip("/")
+    return (rel.lower() + "/").startswith(_EXCLUDED_PREFIX) or bool(_SIDE_FILE_RE.search(rel))
 
 
 def to_pending_files(project_root: str, entries: list[tuple[str, str]]) -> list[str]:
@@ -323,15 +331,17 @@ def _head(project_root: str, args: list[str], timeout: float) -> dict:
     ok, out = _run_lore(project_root, args, timeout)
     if not ok:
         return _failed(out)
+    extra: dict[str, Any] = {}
     if args == ["status"]:
         st = parse_status(out)
         rev, sig = st["local_revision"], st["local_signature"]
+        extra["changes"] = [*st["staged"], *st["untracked"]]
     else:
         hist = parse_history(out)
         rev, sig = (hist[0]["revision"], hist[0]["signature"]) if hist else (None, "")
     if not sig:
         return _failed("lore shows no revision")
-    return {"ok": True, "revision": rev, "signature": sig, "error": ""}
+    return {"ok": True, "revision": rev, "signature": sig, **extra, "error": ""}
 
 
 def remote_head(project_root: str, *, timeout: float = 30.0) -> dict:
@@ -340,7 +350,8 @@ def remote_head(project_root: str, *, timeout: float = 30.0) -> dict:
 
 
 def local_head(project_root: str, *, timeout: float = 30.0) -> dict:
-    """{ok, revision, signature, error}: the island's current revision (``lore status``)."""
+    """{ok, revision, signature, changes, error}: the island's current revision and its
+    working-tree ``(code, rel)`` changes (one ``lore status``, as in :func:`repo_state`)."""
     return _head(project_root, ["status"], timeout)
 
 
@@ -384,7 +395,8 @@ def pending_paths(project_root: str, *, timeout: float = 60.0) -> dict:
     ``main``: working-tree changes (staged + untracked) plus files changed between the merge base
     of (local head, remote main head) and the local head (autosave commits, pushed to a personal
     branch or not). Only files that exist on disk are listed: deletes are dropped, untracked
-    directories expand to their files. Content/Developers/** is excluded.
+    directories expand to their files. Content/Developers/** and the ``~base`` / ``~mine`` /
+    ``~theirs`` copies Lore leaves beside a conflicted merge are excluded.
     ``timeout`` applies to each lore call (up to 4)."""
     st, err = _state(project_root, timeout)
     if st is None:
@@ -397,6 +409,24 @@ def pending_paths(project_root: str, *, timeout: float = 60.0) -> dict:
     except (OSError, ValueError) as exc:
         return _failed(f"listing pending files failed: {exc}", paths=[])
     return {"ok": True, "paths": paths, "error": ""}
+
+
+def conflict_marked(paths: list[str]) -> list[str]:
+    """The text files among ``paths`` that still hold merge conflict markers (a line starting
+    ``<<<<<<< `` and one starting ``>>>>>>> ``, as Lore writes them). Reads the first
+    :data:`_MARKER_MAX_BYTES` of each; unreadable files are skipped. Never raises."""
+    out: list[str] = []
+    for path in paths:
+        if Path(path).suffix.lower() not in _TEXT_EXTS:
+            continue
+        try:
+            with open(path, "rb") as fh:
+                text = fh.read(_MARKER_MAX_BYTES).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if _MARKER_OPEN_RE.search(text) and _MARKER_CLOSE_RE.search(text):
+            out.append(path)
+    return out
 
 
 def whoami(project_root: str, *, timeout: float = 30.0) -> dict[str, str]:

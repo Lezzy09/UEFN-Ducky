@@ -10,7 +10,10 @@ Two PCs share one island through Unreal Revision Control (``revision_push`` /
 - only when one of them moved, ``lore_cli.repo_state`` (3 calls) says which remote revisions
   the island lacks and who made them;
 - only for news worth an alert, ``lore_cli.overlap`` (1 diff, +1 when this PC has autosaves
-  main lacks) names the files changed on both PCs: the alert says "pull with care".
+  main lacks) names the files changed on both PCs: the alert says "pull with care";
+- while the island stays behind after that alert, the overlap again each round with the
+  working tree ``lore status`` just listed (a file edited outside UEFN, in VS Code, shows
+  there a little later): a file newly changed on both PCs gives one follow-up alert.
 
 Revisions made on another PC (a check-in of this PC's own autosave doesn't count) give one
 alert per new remote head: a Windows notification when no Ducky window is in front, the
@@ -62,7 +65,8 @@ _st: dict[str, Any] = {}
 
 def _reset(island: str = "") -> None:
     _st.clear()
-    _st.update(island=island, remote_sig="", local_sig="", behind=False, told="", fails=0, both=[])
+    # state: the last behind repo_state (the overlap's input); both: files changed on both PCs.
+    _st.update(island=island, remote_sig="", local_sig="", behind=False, told="", fails=0, both=[], state=None)
     if island:
         doc = _read_doc()
         if doc and doc.get("island") == island:
@@ -216,6 +220,7 @@ def _apply(island: str, state: dict[str, Any], lore: Any) -> None:
     _st.update(remote_sig=str(state.get("remote_signature") or ""),
                local_sig=str(state.get("local_signature") or ""), behind=behind)
     text = news_text(name, news) if news else ""
+    _st["state"] = state if behind else None
     if not behind:
         _st["both"] = []
     if behind and news and _st["remote_sig"] != _st["told"]:
@@ -246,6 +251,29 @@ def _apply(island: str, state: dict[str, Any], lore: Any) -> None:
         "checked_at": int(time.time()),
         "pid": os.getpid(),
     })
+
+
+def _recheck_both(island: str, local: dict[str, Any], lore: Any) -> None:
+    """Behind and already told: the overlap again with this round's working tree (1 diff).
+    Files newly changed on both PCs give one follow-up alert; the doc's list stays current."""
+    if not _st["state"] or not _st["told"]:
+        return
+    state = {**_st["state"], "changes": local.get("changes", _st["state"].get("changes") or [])}
+    both = _both_changed(island, state, lore)
+    if both == _st["both"]:
+        return
+    new = [rel for rel in both if rel not in _st["both"]]
+    _st["both"] = both
+    name = Path(island).name
+    if new:
+        shown = ", ".join(new[:3]) + (f" (+{len(new) - 3} more)" if len(new) > 3 else "")
+        detail = f"{shown} {'was' if len(new) == 1 else 'were'} also changed on this PC — pull with care"
+        _alert(name, "Changed on both PCs.", f"{detail}. Ask a Ducky to run revision_pull when you're ready.")
+        _push({"type": "island_updates", "island": island, "name": name, "behind": True,
+               "count": len(new), "detail": detail})
+    doc = _read_doc()
+    if doc and doc.get("island") == island:
+        _write_doc({**doc, "both_changed": list(both), "checked_at": int(time.time())})
 
 
 def _refresh_locks(island: str, lore: Any, every_s: float) -> None:
@@ -303,6 +331,8 @@ def _updates_round(island: str, lore: Any) -> float:
         if not local.get("ok"):
             return _failed(str(local.get("error") or "local head"))
         local_moved = local["signature"] != _st["local_sig"]
+        if head["signature"] == _st["remote_sig"] and not local_moved:
+            _recheck_both(island, local, lore)
     if head["signature"] == _st["remote_sig"] and not local_moved:
         _st["fails"] = 0
         return _interval()

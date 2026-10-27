@@ -77,6 +77,31 @@ def _remote_state(state: dict) -> dict:
     return {k: state.get(k) for k in ("in_sync", "behind", "ahead")}
 
 
+def _rel(root: str, path: str) -> str:
+    base = root.replace("\\", "/").rstrip("/") + "/"
+    return path[len(base):] if path.lower().startswith(base.lower()) else path.rsplit("/", 1)[-1]
+
+
+# UEFN's own names for its conflict panel (French UI seen live on Oct 27; English guessed).
+_RESOLVE_STEPS = (
+    'in the "Conflict Resolution" tab ("Résolution des conflits", next to Details) the person picks '
+    "\"Keep All Current\" (\"Tout ce qui est actuel\": this PC's version) or \"Take All Incoming\" "
+    "(\"Tout ce qui est entrant\": the other PC's), or \"Resolve in VS Code\" (\"Résoudre dans VS Code\") "
+    'per file, then clicks "Resolve Conflict" ("Résoudre conflit"); then push (revision_push).'
+)
+CONFLICT_DIALOG_HINT = (
+    'UEFN is showing its "Conflicting Changes" dialog ("Modifications en conflit") and is blocked until '
+    "the person acts; never press it. The person clicks \"Review Conflicts\" (\"Examiner les conflits\"), "
+    "then " + _RESOLVE_STEPS
+)
+
+
+def _conflict_dialog() -> dict | None:
+    from backend.tools.core.uefn_popups import find_conflict_dialog
+
+    return find_conflict_dialog()
+
+
 @plugin_mcp_tool("uefn")
 def revision_push(description: str, pretty: bool = False) -> str:
     """Save the island and push every change not yet on the remote (Unreal Revision Control). Never without a description."""
@@ -100,6 +125,18 @@ def revision_push(description: str, pretty: bool = False) -> str:
     pending = lore.pending_paths(root)
     if not pending.get("ok"):
         return tool_json({"ok": False, "error": pending.get("error") or "could not list pending files"}, pretty=pretty)
+    # A text file Lore merged keeps its <<<<<<< / >>>>>>> markers until someone resolves it.
+    marked = [_rel(root, p) for p in lore.conflict_marked(pending.get("paths") or [])]
+    if marked:
+        return tool_json(
+            {
+                "ok": False,
+                "conflict_markers": marked,
+                "error": f"{marked[0]} still has conflict markers from a merge: resolve it "
+                "(UEFN's Conflict resolution tab or VS Code) before pushing",
+            },
+            pretty=pretty,
+        )
     # A file changed here while the other PC holds its lock (edited by hand past UEFN's
     # warning, or by a script) can't be checked in: say which, instead of a failed check-in.
     from backend.bridge.island_locks import locked_files
@@ -183,7 +220,16 @@ def revision_pull(force: bool = False, allow_both_changed: bool = False, pretty:
             },
             pretty=pretty,
         )
-    result = send_command("revision_sync", {"force": bool(force)}, timeout=_REVISION_TIMEOUT)
+    try:
+        result = send_command("revision_sync", {"force": bool(force)}, timeout=_REVISION_TIMEOUT)
+    except Exception as exc:  # the editor thread is held (a dialog) or the listener is gone
+        result = {"ok": False, "error": str(exc)}
+    # A merged file makes UEFN ask the person in a modal dialog; the sync waits on it.
+    if not result.get("ok") and not result.get("needs_save") and _conflict_dialog():
+        return tool_json(
+            {"ok": False, "conflict_dialog": True, "both_changed": both_changed, "hint": CONFLICT_DIALOG_HINT},
+            pretty=pretty,
+        )
     if result.get("needs_save"):
         return tool_json(
             {
@@ -217,9 +263,9 @@ def _conflicts(files: list[dict]) -> dict:
         marked, error = set(), str(exc)
     conflicted = [f["rel"] for f in files if f["path"].lower() in marked]
     if conflicted:
-        hint = ("UEFN marks these files conflicted: the person resolves them in UEFN (Revision Control in the "
-                "status bar > Resolve Conflicts), then pushes (revision_push).")
+        hint = "UEFN marks these files conflicted: " + _RESOLVE_STEPS
     else:
         hint = ("UEFN marks none of them conflicted" + (f" (could not ask: {error})" if error else "")
-                + ": have the person check each file kept both PCs' changes before pushing.")
+                + ": have the person check each file kept both PCs' changes before pushing (a text file "
+                "Lore merged has <<<<<<< / >>>>>>> markers to resolve, and ~base/~mine/~theirs copies beside it).")
     return {"conflicted": conflicted, "hint": hint}
